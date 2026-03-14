@@ -10,8 +10,8 @@ export default defineConfig(({mode}) => {
     define: {
       'process.env.GEMINI_API_KEY': JSON.stringify(env.GEMINI_API_KEY),
       'process.env.VITE_STRIPE_PUBLISHABLE_KEY': JSON.stringify(env.VITE_STRIPE_PUBLISHABLE_KEY),
-      'process.env.STRIPE_PRICE_ID_PLUS': JSON.stringify(env.STRIPE_PRICE_ID_PLUS),
-      'process.env.STRIPE_PRICE_ID_PRO': JSON.stringify(env.STRIPE_PRICE_ID_PRO),
+      'process.env.VITE_STRIPE_PRICE_ID_PLUS': JSON.stringify(env.VITE_STRIPE_PRICE_ID_PLUS || env.STRIPE_PRICE_ID_PLUS),
+      'process.env.VITE_STRIPE_PRICE_ID_PRO': JSON.stringify(env.VITE_STRIPE_PRICE_ID_PRO || env.STRIPE_PRICE_ID_PRO),
     },
     resolve: {
       alias: {

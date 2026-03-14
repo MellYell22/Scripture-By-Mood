@@ -1,17 +1,30 @@
 import React, { useState, useEffect } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Alert } from 'react-native';
 import { supabase } from '../services/supabase';
 import { Profile } from '../types';
-import { LogOut, CreditCard, Shield, CheckCircle2 } from 'lucide-react';
+import { LogOut, CreditCard, Shield, CheckCircle2, AlertCircle } from 'lucide-react';
 import { createCheckoutSession } from '../services/stripe';
 import { OWNER_EMAIL, hasProAccess } from '../utils/tier';
+import { PLANS } from '../constants';
 
 export default function ProfileScreen() {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(false);
+  const [statusMessage, setStatusMessage] = useState<{ text: string, type: 'success' | 'error' | 'info' } | null>(null);
 
   useEffect(() => {
     fetchProfile();
+    
+    // Check for URL parameters (success/canceled)
+    const params = new URLSearchParams(window.location.search);
+    if (params.get('success')) {
+      setStatusMessage({ text: 'Subscription updated successfully! Welcome to the family.', type: 'success' });
+      // Clear params from URL
+      window.history.replaceState({}, '', window.location.pathname);
+    } else if (params.get('canceled')) {
+      setStatusMessage({ text: 'Checkout canceled. No changes were made.', type: 'info' });
+      window.history.replaceState({}, '', window.location.pathname);
+    }
   }, []);
 
   const fetchProfile = async () => {
@@ -30,15 +43,23 @@ export default function ProfileScreen() {
     await supabase.auth.signOut();
   };
 
-  const handleUpgrade = async (tier: 'plus' | 'pro') => {
+  const handleUpgrade = async (tierId: string) => {
     if (!profile) return;
     setLoading(true);
+    setStatusMessage(null);
+    
+    const plan = Object.values(PLANS).find(p => p.id === tierId);
+    
+    console.log(`[StripeDebug] Upgrade button clicked: ${tierId}`);
+    
     try {
-      const priceId = tier === 'plus' ? import.meta.env.VITE_STRIPE_PRICE_ID_PLUS : import.meta.env.VITE_STRIPE_PRICE_ID_PRO;
-      if (!priceId) throw new Error('Price ID not configured');
-      await createCheckoutSession(priceId, profile.id);
+      if (!plan || !plan.priceId) {
+        throw new Error(`Price ID for ${tierId} plan is not configured.`);
+      }
+      await createCheckoutSession(plan.priceId, profile.id);
     } catch (error: any) {
-      alert(error.message);
+      console.error(`[StripeDebug] Upgrade error: ${error.message}`);
+      setStatusMessage({ text: error.message, type: 'error' });
     } finally {
       setLoading(false);
     }
@@ -58,66 +79,66 @@ export default function ProfileScreen() {
         </View>
       </View>
 
+      {statusMessage && (
+        <View style={[styles.statusBanner, styles[`${statusMessage.type}Banner`]]}>
+          {statusMessage.type === 'error' ? <AlertCircle size={16} color="#ef4444" /> : <CheckCircle2 size={16} color={statusMessage.type === 'success' ? '#10B981' : '#d4af37'} />}
+          <Text style={[styles.statusText, styles[`${statusMessage.type}Text`]]}>{statusMessage.text}</Text>
+        </View>
+      )}
+
       <Text style={styles.sectionTitle}>Subscription Plans</Text>
       
-      <View style={styles.planCard}>
-        <View style={styles.planHeader}>
-          <Text style={styles.planName}>Plus Plan</Text>
-          <Text style={styles.planPrice}>$9.99/mo</Text>
-        </View>
-        <View style={styles.featureList}>
-          <View style={styles.featureItem}>
-            <CheckCircle2 color="#10B981" size={16} />
-            <Text style={styles.featureText}>Unlimited Mood Search</Text>
-          </View>
-          <View style={styles.featureItem}>
-            <CheckCircle2 color="#10B981" size={16} />
-            <Text style={styles.featureText}>Extended AI Devotions</Text>
-          </View>
-        </View>
-        <TouchableOpacity 
-          style={[styles.planButton, (profile?.subscription_tier === 'plus' || profile?.email === OWNER_EMAIL) && styles.activePlanButton]} 
-          onPress={() => handleUpgrade('plus')}
-          disabled={loading || profile?.subscription_tier === 'plus' || profile?.subscription_tier === 'pro' || profile?.email === OWNER_EMAIL}
-        >
-          <Text style={styles.planButtonText}>
-            {profile?.email === OWNER_EMAIL ? 'Included' : profile?.subscription_tier === 'plus' ? 'Current Plan' : profile?.subscription_tier === 'pro' ? 'Included' : 'Upgrade to Plus'}
-          </Text>
-        </TouchableOpacity>
-      </View>
+      {Object.values(PLANS).map((plan) => {
+        const isCurrentPlan = profile?.subscription_tier === plan.id;
+        const isOwner = profile?.email === OWNER_EMAIL;
+        const isPro = profile?.subscription_tier === 'pro';
+        
+        // If user is Pro, Plus is "Included"
+        const isIncluded = isOwner || (plan.id === 'plus' && isPro);
+        const isDisabled = loading || isCurrentPlan || isIncluded;
 
-      <View style={[styles.planCard, styles.proCard]}>
-        <View style={styles.proBadge}>
-          <Text style={styles.proBadgeText}>BEST VALUE</Text>
-        </View>
-        <View style={styles.planHeader}>
-          <Text style={[styles.planName, { color: '#fff' }]}>Pro Plan</Text>
-          <Text style={[styles.planPrice, { color: '#fff' }]}>$19.99/mo</Text>
-        </View>
-        <View style={styles.featureList}>
-          <View style={styles.featureItem}>
-            <CheckCircle2 color="#fff" size={16} />
-            <Text style={[styles.featureText, { color: '#fff' }]}>Unlimited Everything</Text>
+        return (
+          <View key={plan.id} style={[styles.planCard, plan.id === 'pro' && styles.proCard]}>
+            {plan.id === 'pro' && (
+              <View style={styles.proBadge}>
+                <Text style={styles.proBadgeText}>BEST VALUE</Text>
+              </View>
+            )}
+            <View style={styles.planHeader}>
+              <Text style={[styles.planName, plan.id === 'pro' && { color: '#fff' }]}>{plan.name}</Text>
+              <Text style={[styles.planPrice, plan.id === 'pro' && { color: '#fff' }]}>{plan.price}/{plan.interval}</Text>
+            </View>
+            <View style={styles.featureList}>
+              {plan.features.map((feature, idx) => (
+                <View key={idx} style={styles.featureItem}>
+                  <CheckCircle2 color={plan.id === 'pro' ? "#fff" : "#10B981"} size={16} />
+                  <Text style={[styles.featureText, plan.id === 'pro' && { color: '#fff' }]}>{feature}</Text>
+                </View>
+              ))}
+            </View>
+            <TouchableOpacity 
+              style={[
+                styles.planButton, 
+                plan.id === 'pro' && styles.proButton,
+                (isCurrentPlan || isIncluded) && (plan.id === 'pro' ? styles.activeProButton : styles.activePlanButton)
+              ]} 
+              onPress={() => handleUpgrade(plan.id)}
+              disabled={isDisabled}
+            >
+              {loading && !isDisabled ? (
+                <ActivityIndicator size="small" color={plan.id === 'pro' ? '#fff' : '#d4af37'} />
+              ) : (
+                <Text style={[
+                  styles.planButtonText, 
+                  plan.id === 'pro' && { color: '#4F46E5' }
+                ]}>
+                  {isOwner ? 'Included' : isCurrentPlan ? 'Current Plan' : isIncluded ? 'Included' : `Upgrade to ${plan.name.split(' ')[0]}`}
+                </Text>
+              )}
+            </TouchableOpacity>
           </View>
-          <View style={styles.featureItem}>
-            <CheckCircle2 color="#fff" size={16} />
-            <Text style={[styles.featureText, { color: '#fff' }]}>Live Voice Chat with David</Text>
-          </View>
-          <View style={styles.featureItem}>
-            <CheckCircle2 color="#fff" size={16} />
-            <Text style={[styles.featureText, { color: '#fff' }]}>Advanced AI Companion</Text>
-          </View>
-        </View>
-        <TouchableOpacity 
-          style={[styles.planButton, styles.proButton, (profile?.subscription_tier === 'pro' || profile?.email === OWNER_EMAIL) && styles.activeProButton]} 
-          onPress={() => handleUpgrade('pro')}
-          disabled={loading || profile?.subscription_tier === 'pro' || profile?.email === OWNER_EMAIL}
-        >
-          <Text style={[styles.planButtonText, { color: (profile?.subscription_tier === 'pro' || profile?.email === OWNER_EMAIL) ? '#4F46E5' : '#4F46E5' }]}>
-            {profile?.email === OWNER_EMAIL ? 'Included' : profile?.subscription_tier === 'pro' ? 'Current Plan' : 'Upgrade to Pro'}
-          </Text>
-        </TouchableOpacity>
-      </View>
+        );
+      })}
 
       <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
         <LogOut color="#EF4444" size={20} />
@@ -186,6 +207,34 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 1,
   },
+  statusBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 20,
+    borderWidth: 1,
+  },
+  successBanner: {
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+    borderColor: 'rgba(16, 185, 129, 0.3)',
+  },
+  errorBanner: {
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+    borderColor: 'rgba(239, 68, 68, 0.3)',
+  },
+  infoBanner: {
+    backgroundColor: 'rgba(212, 175, 55, 0.1)',
+    borderColor: 'rgba(212, 175, 55, 0.3)',
+  },
+  statusText: {
+    fontSize: 12,
+    marginLeft: 10,
+    fontWeight: '500',
+  },
+  successText: { color: '#10B981' },
+  errorText: { color: '#ef4444' },
+  infoText: { color: '#d4af37' },
   sectionTitle: {
     fontSize: 14,
     fontWeight: 'bold',
@@ -194,38 +243,6 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 2,
     textAlign: 'center',
-  },
-  settingLabel: {
-    fontSize: 10,
-    color: 'rgba(212, 175, 55, 0.5)',
-    fontWeight: 'bold',
-    letterSpacing: 2,
-    marginBottom: 15,
-  },
-  translationGrid: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-  },
-  translationItem: {
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 15,
-    borderWidth: 1,
-    borderColor: 'rgba(212, 175, 55, 0.2)',
-    marginRight: 8,
-    marginBottom: 8,
-  },
-  translationItemActive: {
-    backgroundColor: '#d4af37',
-    borderColor: '#d4af37',
-  },
-  translationItemText: {
-    fontSize: 11,
-    color: '#d4af37',
-    fontWeight: 'bold',
-  },
-  translationItemTextActive: {
-    color: '#0b1e3d',
   },
   planCard: {
     backgroundColor: '#0f2a52',
@@ -299,6 +316,8 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     borderWidth: 1,
     borderColor: 'rgba(212, 175, 55, 0.3)',
+    minHeight: 48,
+    justifyContent: 'center',
   },
   activePlanButton: {
     backgroundColor: 'rgba(212, 175, 55, 0.15)',
@@ -334,16 +353,4 @@ const styles = StyleSheet.create({
     letterSpacing: 2,
     fontFamily: 'Playfair Display',
   },
-  footer: {
-    padding: 40,
-    alignItems: 'center',
-  },
-  footerText: {
-    color: 'rgba(212, 175, 55, 0.4)',
-    fontSize: 9,
-    textTransform: 'uppercase',
-    letterSpacing: 2,
-    fontWeight: '600',
-    fontFamily: 'Cinzel',
-  }
 });

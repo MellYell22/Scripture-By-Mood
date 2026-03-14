@@ -43,17 +43,26 @@ async function startServer() {
         case "checkout.session.completed": {
           const session = event.data.object as Stripe.Checkout.Session;
           const userId = session.client_reference_id;
-          const priceId = session.line_items?.data[0]?.price?.id;
+          const priceId = session.line_items?.data?.[0]?.price?.id || (session as any).metadata?.priceId;
+
+          console.log(`[StripeWebhook] Checkout completed for user: ${userId}, priceId: ${priceId}`);
 
           if (userId && supabase) {
             let tier = "free";
-            if (priceId === process.env.STRIPE_PRICE_ID_PLUS) tier = "plus";
-            if (priceId === process.env.STRIPE_PRICE_ID_PRO) tier = "pro";
+            const plusPriceId = process.env.VITE_STRIPE_PRICE_ID_PLUS || process.env.STRIPE_PRICE_ID_PLUS;
+            const proPriceId = process.env.VITE_STRIPE_PRICE_ID_PRO || process.env.STRIPE_PRICE_ID_PRO;
 
-            await supabase
+            if (priceId === plusPriceId) tier = "plus";
+            if (priceId === proPriceId) tier = "pro";
+
+            console.log(`[StripeWebhook] Updating user ${userId} to tier: ${tier}`);
+
+            const { error } = await supabase
               .from("profiles")
               .update({ subscription_tier: tier })
               .eq("id", userId);
+            
+            if (error) console.error(`[StripeWebhook] Supabase error: ${error.message}`);
           }
           break;
         }
@@ -96,19 +105,48 @@ async function startServer() {
   // Stripe Checkout Session Creation
   app.post("/api/create-checkout-session", async (req, res) => {
     const { priceId, userId } = req.body;
-    if (!stripe) return res.status(500).json({ error: "Stripe not configured" });
+    
+    console.log(`[StripeAPI] Received request for checkout session. User: ${userId}, Price: ${priceId}`);
+
+    if (!stripe) {
+      console.error("[StripeAPI] Stripe is not configured on the server");
+      return res.status(500).json({ error: "Stripe is not configured on the server" });
+    }
+
+    if (!priceId) {
+      console.error("[StripeAPI] Missing priceId in request");
+      return res.status(400).json({ error: "Missing priceId" });
+    }
+
+    if (!userId) {
+      console.error("[StripeAPI] Missing userId in request");
+      return res.status(400).json({ error: "Missing userId" });
+    }
 
     try {
+      const appUrl = process.env.APP_URL || "http://localhost:3000";
+      // Ensure no trailing slash for consistency
+      const baseUrl = appUrl.endsWith('/') ? appUrl.slice(0, -1) : appUrl;
+
+      console.log(`[StripeAPI] Creating session with baseUrl: ${baseUrl}`);
+
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ["card"],
         line_items: [{ price: priceId, quantity: 1 }],
         mode: "subscription",
-        success_url: `${process.env.APP_URL}/profile?success=true`,
-        cancel_url: `${process.env.APP_URL}/profile?canceled=true`,
+        success_url: `${baseUrl}/profile?success=true`,
+        cancel_url: `${baseUrl}/profile?canceled=true`,
         client_reference_id: userId,
+        metadata: {
+          userId,
+          priceId
+        }
       });
+      
+      console.log(`[StripeAPI] Session created: ${session.id}`);
       res.json({ url: session.url });
     } catch (err: any) {
+      console.error(`[StripeAPI] Stripe Error: ${err.message}`);
       res.status(500).json({ error: err.message });
     }
   });

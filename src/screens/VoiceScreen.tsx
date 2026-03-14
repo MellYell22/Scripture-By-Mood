@@ -18,6 +18,7 @@ export default function VoiceScreen({ navigation }: any) {
   const [debugLogs, setDebugLogs] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [showDebug, setShowDebug] = useState(false);
+  const [lastResponseText, setLastResponseText] = useState<string | null>(null);
   
   const sessionRef = useRef<any>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -105,17 +106,23 @@ export default function VoiceScreen({ navigation }: any) {
         return;
       }
 
+      addLog(`Modality check: ${typeof Modality !== 'undefined' ? 'Modality exists' : 'Modality is UNDEFINED'}`);
+      const audioModality = typeof Modality !== 'undefined' ? Modality.AUDIO : 'audio';
+      addLog(`Using modality: ${audioModality}`);
+
       const ai = new GoogleGenAI({ apiKey });
       
       addLog("Starting Live connection (09-2025)...");
       const session = await ai.live.connect({
         model: "gemini-2.5-flash-native-audio-preview-09-2025",
         config: {
-          responseModalities: [Modality.AUDIO],
+          responseModalities: [audioModality as any],
           speechConfig: {
             voiceConfig: { prebuiltVoiceConfig: { voiceName: "Zephyr" } },
           },
           systemInstruction: "You are David, a warm, compassionate AI Bible companion. This is a real-time voice conversation. Respond naturally and warmly. Keep responses concise (1-2 sentences).",
+          inputAudioTranscription: {},
+          outputAudioTranscription: {},
         },
         callbacks: {
           onopen: () => {
@@ -124,31 +131,42 @@ export default function VoiceScreen({ navigation }: any) {
             setIsConnecting(false);
             startAudioCapture();
           },
-          onmessage: async (message) => {
+          onmessage: async (message: any) => {
             if (message.setupComplete) {
               addLog("Model setup complete");
             }
             
             if (message.serverContent?.modelTurn) {
-              addLog("Model response received");
+              addLog("Model response received (modelTurn)");
               setIsDavidThinking(false);
               const parts = message.serverContent.modelTurn.parts;
               if (parts) {
+                addLog(`Response has ${parts.length} parts`);
                 for (const part of parts) {
                   if (part.inlineData?.data) {
-                    addLog(`Audio chunk received (${part.inlineData.data.length} bytes)`);
+                    addLog(`Audio chunk received: ${part.inlineData.data.length} base64 chars`);
                     audioQueue.current.push(part.inlineData.data);
                     processAudioQueue();
                   }
                   if (part.text) {
-                    addLog(`Model text: ${part.text}`);
+                    addLog(`Model text response: "${part.text}"`);
+                    setLastResponseText(part.text);
                   }
                 }
+              } else {
+                addLog("Response has no parts");
+              }
+            }
+
+            if (message.serverContent?.userTurn) {
+              const userText = message.serverContent.userTurn.parts?.[0]?.text;
+              if (userText) {
+                addLog(`User transcription: "${userText}"`);
               }
             }
             
             if (message.serverContent?.interrupted) {
-              addLog("Model interrupted");
+              addLog("Model interrupted by user speech");
               setIsDavidSpeaking(false);
               setIsDavidThinking(false);
               audioQueue.current = [];
@@ -294,22 +312,39 @@ export default function VoiceScreen({ navigation }: any) {
     setIsListening(false);
   };
 
+  const nextStartTimeRef = useRef<number>(0);
+
   const processAudioQueue = async () => {
-    if (isPlaying.current || audioQueue.current.length === 0) return;
+    if (isPlaying.current) {
+      addLog("Queue already processing, skipping trigger");
+      return;
+    }
+    if (audioQueue.current.length === 0) {
+      addLog("Queue empty, nothing to process");
+      return;
+    }
     
+    addLog(`Starting queue processing (${audioQueue.current.length} chunks)`);
     isPlaying.current = true;
     setIsDavidSpeaking(true);
     setIsDavidThinking(false);
+    
+    // Reset nextStartTime when starting a new response
+    const context = getAudioContext();
+    nextStartTimeRef.current = context.currentTime + 0.1;
     
     try {
       while (audioQueue.current.length > 0) {
         const chunk = audioQueue.current.shift();
         if (chunk) {
+          addLog(`Playing chunk from queue...`);
           await playAudio(chunk);
         }
       }
+      addLog("Queue processing finished");
     } catch (err) {
       addLog(`Queue processing error: ${err}`);
+      console.error("Queue error:", err);
     } finally {
       isPlaying.current = false;
       setIsDavidSpeaking(false);
@@ -317,18 +352,30 @@ export default function VoiceScreen({ navigation }: any) {
   };
 
   const playAudio = async (base64Data: string): Promise<void> => {
+    if (!base64Data) return;
+    
+    addLog(`playAudio called with ${base64Data.length} chars`);
     const context = getAudioContext(16000);
     
     if (context.state === 'suspended') {
+      addLog("Resuming suspended AudioContext...");
       await context.resume();
     }
 
     return new Promise((resolve) => {
       try {
+        addLog("Decoding base64 audio...");
         const binary = atob(base64Data);
         const bytes = new Uint8Array(binary.length);
         for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
         
+        if (bytes.length < 2) {
+          addLog("Chunk too small, skipping");
+          resolve();
+          return;
+        }
+
+        addLog(`Decoded ${bytes.length} bytes. Converting to Float32...`);
         // Ensure the buffer length is even for Int16Array
         const pcmData = new Int16Array(bytes.buffer.slice(0, bytes.buffer.byteLength - (bytes.buffer.byteLength % 2)));
         const float32Data = new Float32Array(pcmData.length);
@@ -337,14 +384,28 @@ export default function VoiceScreen({ navigation }: any) {
         }
         
         // Gemini Live returns 24kHz PCM
+        addLog(`Creating AudioBuffer: 1 channel, ${float32Data.length} samples, 24000Hz`);
         const audioBuffer = context.createBuffer(1, float32Data.length, 24000);
         audioBuffer.getChannelData(0).set(float32Data);
         
         const source = context.createBufferSource();
         source.buffer = audioBuffer;
         source.connect(context.destination);
-        source.onended = () => resolve();
-        source.start();
+        
+        // Gapless scheduling
+        const currentTime = context.currentTime;
+        if (nextStartTimeRef.current < currentTime) {
+          nextStartTimeRef.current = currentTime + 0.05;
+        }
+        
+        source.onended = () => {
+          addLog("Chunk playback ended");
+          resolve();
+        };
+        
+        addLog(`Scheduling source playback at ${nextStartTimeRef.current.toFixed(3)} (current: ${currentTime.toFixed(3)})`);
+        source.start(nextStartTimeRef.current);
+        nextStartTimeRef.current += audioBuffer.duration;
       } catch (err) {
         addLog(`Playback error: ${err}`);
         console.error("Error playing audio chunk:", err);
@@ -354,25 +415,33 @@ export default function VoiceScreen({ navigation }: any) {
   };
 
   const testAudio = async () => {
-    // Play a simple beep or a short silent-ish buffer to wake up the context
-    const context = getAudioContext(16000);
-    await context.resume();
-    
-    const oscillator = context.createOscillator();
-    const gainNode = context.createGain();
-    
-    oscillator.type = 'sine';
-    oscillator.frequency.setValueAtTime(440, context.currentTime); // A4
-    gainNode.gain.setValueAtTime(0.1, context.currentTime);
-    gainNode.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.5);
-    
-    oscillator.connect(gainNode);
-    gainNode.connect(context.destination);
-    
-    oscillator.start();
-    oscillator.stop(context.currentTime + 0.5);
-    
-    alert("Test sound played. If you didn't hear a beep, please check your device volume and browser permissions.");
+    addLog("Starting audio output test...");
+    try {
+      const context = getAudioContext(16000);
+      addLog(`Context state: ${context.state}`);
+      await context.resume();
+      addLog(`Context state after resume: ${context.state}`);
+      
+      const oscillator = context.createOscillator();
+      const gainNode = context.createGain();
+      
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(440, context.currentTime); // A4
+      gainNode.gain.setValueAtTime(0.1, context.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.0001, context.currentTime + 0.5);
+      
+      oscillator.connect(gainNode);
+      gainNode.connect(context.destination);
+      
+      addLog("Starting oscillator...");
+      oscillator.start();
+      oscillator.stop(context.currentTime + 0.5);
+      
+      alert("Test sound played. If you didn't hear a beep, please check your device volume and browser permissions.");
+    } catch (err) {
+      addLog(`Test audio error: ${err}`);
+      console.error(err);
+    }
   };
 
   if (!hasProAccess(profile)) {
@@ -453,6 +522,17 @@ export default function VoiceScreen({ navigation }: any) {
           {isConnecting ? "Connecting..." : isDavidSpeaking ? "David is speaking..." : isDavidThinking ? "David is thinking..." : isConnected ? "David is listening..." : "Tap to start conversation"}
         </Text>
       </View>
+
+      {lastResponseText && isConnected && (
+        <motion.div 
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          style={styles.textFallbackContainer}
+        >
+          <Text style={styles.textFallbackLabel}>David says:</Text>
+          <Text style={styles.textFallbackContent}>{lastResponseText}</Text>
+        </motion.div>
+      )}
 
       {error && (
         <View style={styles.errorBanner}>
@@ -657,6 +737,30 @@ const styles = StyleSheet.create({
     fontSize: 12,
     textAlign: 'center',
     fontWeight: '600',
+  },
+  textFallbackContainer: {
+    backgroundColor: 'rgba(15, 42, 82, 0.6)',
+    padding: 15,
+    borderRadius: 16,
+    marginBottom: 20,
+    width: '100%',
+    borderWidth: 1,
+    borderColor: 'rgba(212, 175, 55, 0.3)',
+  },
+  textFallbackLabel: {
+    color: '#d4af37',
+    fontSize: 10,
+    fontWeight: 'bold',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+    marginBottom: 5,
+  },
+  textFallbackContent: {
+    color: '#fff',
+    fontSize: 14,
+    lineHeight: 20,
+    fontStyle: 'italic',
+    textAlign: 'center',
   },
   debugToggleContainer: {
     marginTop: 20,
