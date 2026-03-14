@@ -3,8 +3,13 @@ import { createServer as createViteServer } from "vite";
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
+import path from "path";
+import { fileURLToPath } from "url";
 
 dotenv.config();
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = 3000;
@@ -97,9 +102,21 @@ async function startServer() {
 
   app.use(express.json());
 
+  // Request Logger
+  app.use((req, res, next) => {
+    console.log(`[Server] ${req.method} ${req.url}`);
+    next();
+  });
+
   // API Routes
   app.get("/api/health", (req, res) => {
-    res.json({ status: "ok" });
+    res.json({ 
+      status: "ok", 
+      stripeConfigured: !!stripe,
+      supabaseConfigured: !!supabase,
+      env: process.env.NODE_ENV,
+      appUrl: process.env.APP_URL || "not set"
+    });
   });
 
   // Stripe Checkout Session Creation
@@ -151,6 +168,12 @@ async function startServer() {
     }
   });
 
+  // 404 for API routes - MUST be after all API routes
+  app.all("/api/*", (req, res) => {
+    console.warn(`[Server] 404 on API route: ${req.method} ${req.url}`);
+    res.status(404).json({ error: `API route not found: ${req.method} ${req.url}` });
+  });
+
   // Vite middleware for development
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({
@@ -159,14 +182,19 @@ async function startServer() {
     });
     app.use(vite.middlewares);
   } else {
-    app.use(express.static("dist"));
+    const distPath = path.join(process.cwd(), "dist");
+    app.use(express.static(distPath));
     app.get("*", (req, res) => {
-      res.sendFile("dist/index.html", { root: "." });
+      res.sendFile(path.join(distPath, "index.html"));
     });
   }
 
   app.listen(PORT, "0.0.0.0", () => {
     console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`NODE_ENV: ${process.env.NODE_ENV}`);
+    console.log(`APP_URL: ${process.env.APP_URL || "not set (defaulting to localhost:3000)"}`);
+    console.log(`Stripe Configured: ${!!stripe}`);
+    console.log(`Supabase Configured: ${!!supabase}`);
   });
 }
 

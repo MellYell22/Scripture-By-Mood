@@ -25,6 +25,18 @@ export default function App() {
   const [routeParams, setRouteParams] = useState<any>(null);
 
   useEffect(() => {
+    // Handle initial route based on URL path
+    const path = window.location.pathname;
+    if (path === '/profile') {
+      setCurrentRoute('Profile');
+    } else if (path === '/mood') {
+      setCurrentRoute('Mood');
+    } else if (path === '/chat') {
+      setCurrentRoute('Chat');
+    } else if (path === '/voice') {
+      setCurrentRoute('Voice');
+    }
+    
     if (!isSupabaseConfigured) return;
 
     supabase!.auth.getSession().then(({ data: { session } }) => {
