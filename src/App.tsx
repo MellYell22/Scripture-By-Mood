@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
-import { Home, Search, MessageCircle, Mic, User } from 'lucide-react';
+import { Home, Search, MessageCircle, Mic, User, Music } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from './services/supabase';
 import { Profile } from './types';
 import { AlertTriangle } from 'lucide-react';
@@ -10,6 +10,7 @@ import HomeScreen from './screens/HomeScreen';
 import MoodScreen from './screens/MoodScreen';
 import ChatScreen from './screens/ChatScreen';
 import VoiceScreen from './screens/VoiceScreen';
+import MusicScreen from './screens/MusicScreen';
 import ProfileScreen from './screens/ProfileScreen';
 import AuthScreen from './screens/AuthScreen';
 import OnboardingScreen from './screens/OnboardingScreen';
@@ -124,6 +125,7 @@ export default function App() {
       case 'Mood': return <MoodScreen navigation={nav} route={{ params: routeParams }} />;
       case 'Chat': return <ChatScreen navigation={nav} />;
       case 'Voice': return <VoiceScreen navigation={nav} />;
+      case 'Music': return <MusicScreen />;
       case 'Profile': return <ProfileScreen />;
       default: return <HomeScreen navigation={nav} />;
     }
@@ -161,6 +163,7 @@ export default function App() {
       <View style={styles.tabBar}>
         <TabButton name="Home" icon={Home} />
         <TabButton name="Mood" icon={Search} />
+        <TabButton name="Music" icon={Music} />
         <TabButton name="Chat" icon={MessageCircle} />
         <TabButton name="Voice" icon={Mic} />
         <TabButton name="Profile" icon={User} />

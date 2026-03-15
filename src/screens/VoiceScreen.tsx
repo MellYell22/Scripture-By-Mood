@@ -112,9 +112,9 @@ export default function VoiceScreen({ navigation }: any) {
 
       const ai = new GoogleGenAI({ apiKey });
       
-      addLog("Starting Live connection (09-2025)...");
+      addLog("Starting Live connection (12-2025)...");
       const session = await ai.live.connect({
-        model: "gemini-2.5-flash-native-audio-preview-09-2025",
+        model: "gemini-2.5-flash-native-audio-preview-12-2025",
         config: {
           responseModalities: [audioModality as any],
           speechConfig: {

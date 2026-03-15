@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, ActivityIndicator, TextInput } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, ActivityIndicator, TextInput, Image } from 'react-native';
 import { motion } from 'motion/react';
 import { getMoodScriptures, generateSpeech } from '../services/gemini';
 import { MoodResponse } from '../types';
-import { Sparkles, Search, Volume2 } from 'lucide-react';
+import { Sparkles, Search, Volume2, Music, Play } from 'lucide-react';
 import { supabase } from '../services/supabase';
 import { Profile } from '../types';
+import { WORSHIP_SONGS, Song } from '../constants/songs';
+import { MusicPlayer } from '../components/MusicPlayer';
 
 type ReadingMode = 'sanctuary' | 'parchment' | 'midnight';
 type FontSize = 'small' | 'medium' | 'large';
@@ -66,6 +68,7 @@ export default function MoodScreen({ route, navigation }: any) {
   const [readingMode, setReadingMode] = useState<ReadingMode>('sanctuary');
   const [fontSize, setFontSize] = useState<FontSize>('medium');
   const [isSpeaking, setIsSpeaking] = useState(false);
+  const [activeSong, setActiveSong] = useState<Song | null>(null);
   const audioContextRef = React.useRef<AudioContext | null>(null);
 
   const theme = THEMES[readingMode];
@@ -262,6 +265,56 @@ export default function MoodScreen({ route, navigation }: any) {
                 {result.encouragement}
               </Text>
             </View>
+
+            {/* Mood-based Worship Recommendations */}
+            <View style={styles.musicSection}>
+              <View style={styles.musicHeader}>
+                <Music size={16} color={theme.accent} />
+                <Text style={[styles.musicTitle, { color: theme.accent }]}>Worship for this Mood</Text>
+              </View>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.musicScroll}>
+                {WORSHIP_SONGS.filter(s => s.moods.includes(mood.toUpperCase())).map((song) => (
+                  <TouchableOpacity 
+                    key={song.id} 
+                    style={[styles.musicCard, { backgroundColor: theme.card, borderColor: theme.border }]}
+                    onPress={() => setActiveSong(song)}
+                  >
+                    <Image source={{ uri: song.coverUrl }} style={styles.musicCover} />
+                    <View style={styles.musicCardDetails}>
+                      <Text style={[styles.musicCardTitle, { color: theme.text }]} numberOfLines={1}>{song.title}</Text>
+                      <Text style={[styles.musicCardArtist, { color: theme.muted }]} numberOfLines={1}>{song.artist}</Text>
+                    </View>
+                    <View style={[styles.musicPlayButton, { backgroundColor: theme.accent }]}>
+                      <Play size={12} color={readingMode === 'parchment' ? '#fff' : '#0b1e3d'} fill={readingMode === 'parchment' ? '#fff' : '#0b1e3d'} />
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+
+            {activeSong && (
+              <View style={styles.floatingPlayer}>
+                <MusicPlayer 
+                  song={activeSong} 
+                  onNext={() => {
+                    const moodSongs = WORSHIP_SONGS.filter(s => s.moods.includes(mood.toUpperCase()));
+                    const idx = moodSongs.findIndex(s => s.id === activeSong.id);
+                    setActiveSong(moodSongs[(idx + 1) % moodSongs.length]);
+                  }}
+                  onPrev={() => {
+                    const moodSongs = WORSHIP_SONGS.filter(s => s.moods.includes(mood.toUpperCase()));
+                    const idx = moodSongs.findIndex(s => s.id === activeSong.id);
+                    setActiveSong(moodSongs[(idx - 1 + moodSongs.length) % moodSongs.length]);
+                  }}
+                />
+                <TouchableOpacity 
+                  style={styles.closePlayer} 
+                  onPress={() => setActiveSong(null)}
+                >
+                  <Text style={styles.closePlayerText}>CLOSE PLAYER</Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
             <View style={styles.filterContainer}>
               <TouchableOpacity 
@@ -538,5 +591,80 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontStyle: 'italic',
     textAlign: 'center',
+  },
+  musicSection: {
+    marginBottom: 25,
+  },
+  musicHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 12,
+    gap: 8,
+  },
+  musicTitle: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+  },
+  musicScroll: {
+    flexDirection: 'row',
+  },
+  musicCard: {
+    width: 160,
+    padding: 10,
+    borderRadius: 16,
+    borderWidth: 1,
+    marginRight: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  musicCover: {
+    width: 40,
+    height: 40,
+    borderRadius: 8,
+  },
+  musicCardDetails: {
+    flex: 1,
+    marginLeft: 10,
+  },
+  musicCardTitle: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    fontFamily: 'Playfair Display',
+  },
+  musicCardArtist: {
+    fontSize: 10,
+    marginTop: 2,
+  },
+  musicPlayButton: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: 4,
+  },
+  floatingPlayer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    zIndex: 1000,
+    backgroundColor: '#0b1e3d',
+    padding: 10,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(212, 175, 55, 0.3)',
+  },
+  closePlayer: {
+    alignItems: 'center',
+    paddingVertical: 8,
+    marginTop: 5,
+  },
+  closePlayerText: {
+    color: '#d4af37',
+    fontSize: 9,
+    fontWeight: 'bold',
+    letterSpacing: 1,
   }
 });
