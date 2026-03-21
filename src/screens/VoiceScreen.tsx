@@ -114,7 +114,7 @@ export default function VoiceScreen({ navigation }: any) {
 
       const ai = new GoogleGenAI({ apiKey });
       
-      const VOICE_MODEL = "gemini-2.5-flash-native-audio-preview-09-2025";
+      const VOICE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025";
       const DAVID_VOICE = "Zephyr";
 
       addLog(`Starting Live connection (${VOICE_MODEL})...`);
@@ -181,12 +181,7 @@ export default function VoiceScreen({ navigation }: any) {
               setIsDavidProcessing(false);
               audioQueue.current = [];
               // Stop current audio if playing
-              if (currentAudioRef.current) {
-                try {
-                  currentAudioRef.current.pause();
-                  currentAudioRef.current = null;
-                } catch (e) {}
-              }
+              stopAllAudio();
             }
           },
           onclose: (event: any) => {
@@ -284,7 +279,7 @@ export default function VoiceScreen({ navigation }: any) {
 
             if (sessionRef.current) {
               sessionRef.current.sendRealtimeInput({
-                media: { data: base64Data, mimeType: 'audio/pcm;rate=16000' }
+                audio: { data: base64Data, mimeType: 'audio/pcm;rate=16000' }
               });
               
               const now = Date.now();
@@ -332,73 +327,96 @@ export default function VoiceScreen({ navigation }: any) {
   };
 
   const nextStartTimeRef = useRef<number>(0);
+  const activeSourcesRef = useRef<AudioBufferSourceNode[]>([]);
+
+  const stopAllAudio = () => {
+    activeSourcesRef.current.forEach(source => {
+      try { source.stop(); } catch (e) {}
+    });
+    activeSourcesRef.current = [];
+    nextStartTimeRef.current = 0;
+  };
 
   const processAudioQueue = async () => {
     if (isPlaying.current) {
-      addLog("Queue already processing, skipping trigger");
       return;
     }
     if (audioQueue.current.length === 0) {
-      addLog("Queue empty, nothing to process");
       return;
     }
     
-    addLog(`Starting queue processing (${audioQueue.current.length} chunks)`);
     isPlaying.current = true;
     setIsDavidSpeaking(true);
     setIsDavidThinking(false);
     
-    // Reset nextStartTime when starting a new response
-    const context = getAudioContext();
-    nextStartTimeRef.current = context.currentTime + 0.1;
+    const context = getAudioContext(24000); // Gemini output is usually 24kHz
+    if (nextStartTimeRef.current < context.currentTime) {
+      nextStartTimeRef.current = context.currentTime + 0.1;
+    }
     
     try {
       while (audioQueue.current.length > 0) {
         const chunk = audioQueue.current.shift();
         if (chunk) {
-          addLog(`Playing chunk from queue...`);
           await playAudio(chunk);
         }
       }
-      addLog("Queue processing finished");
     } catch (err) {
       addLog(`Queue processing error: ${err}`);
-      console.error("Queue error:", err);
     } finally {
       isPlaying.current = false;
-      setIsDavidSpeaking(false);
+      // We don't set isDavidSpeaking to false immediately because audio might still be playing in the future
+      // Instead, we'll check if the last scheduled audio has finished
+      const checkFinished = setInterval(() => {
+        if (context.currentTime >= nextStartTimeRef.current) {
+          setIsDavidSpeaking(false);
+          clearInterval(checkFinished);
+        }
+      }, 100);
     }
   };
-
-  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
 
   const playAudio = async (base64Data: string): Promise<void> => {
     if (!base64Data) return;
     
-    addLog(`audio playback started (base64 length: ${base64Data.length})`);
     try {
-      // On web, we use the native Audio object with a data URI
-      const uri = `data:audio/wav;base64,${base64Data}`;
-      const audio = new Audio(uri);
-      currentAudioRef.current = audio;
+      const context = getAudioContext(24000);
       
-      return new Promise((resolve) => {
-        audio.onended = () => {
-          addLog("audio playback finished");
-          currentAudioRef.current = null;
-          resolve();
-        };
-        audio.onerror = (e) => {
-          addLog(`audio playback error: ${e}`);
-          currentAudioRef.current = null;
-          resolve(); // Resolve anyway to continue queue
-        };
-        audio.play().catch(err => {
-          addLog(`audio.play() failed: ${err}`);
-          currentAudioRef.current = null;
-          resolve();
-        });
-      });
+      // Decode base64 to binary
+      const binaryString = atob(base64Data);
+      const bytes = new Uint8Array(binaryString.length);
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+      }
+      
+      // Convert PCM16 (little-endian) to Float32
+      const pcm16 = new Int16Array(bytes.buffer);
+      const float32 = new Float32Array(pcm16.length);
+      for (let i = 0; i < pcm16.length; i++) {
+        float32[i] = pcm16[i] / 32768.0;
+      }
+      
+      // Create AudioBuffer
+      const audioBuffer = context.createBuffer(1, float32.length, 24000);
+      audioBuffer.getChannelData(0).set(float32);
+      
+      // Create Source
+      const source = context.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(context.destination);
+      
+      const startTime = nextStartTimeRef.current;
+      source.start(startTime);
+      activeSourcesRef.current.push(source);
+      
+      // Update next start time
+      nextStartTimeRef.current += audioBuffer.duration;
+      
+      // Cleanup source from active list when done
+      source.onended = () => {
+        activeSourcesRef.current = activeSourcesRef.current.filter(s => s !== source);
+      };
+      
     } catch (err) {
       addLog(`audio playback failed: ${err}`);
       console.error("Error playing audio chunk:", err);
