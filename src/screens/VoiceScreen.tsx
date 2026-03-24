@@ -17,7 +17,7 @@ export default function VoiceScreen({ navigation }: any) {
   const [hasKey, setHasKey] = useState(true);
   const [debugLogs, setDebugLogs] = useState<string[]>([]);
   const [error, setError] = useState<string | null>(null);
-  const [showDebug, setShowDebug] = useState(false);
+  const [showDebug, setShowDebug] = useState(true);
   const [lastResponseText, setLastResponseText] = useState<string | null>(null);
   const [isDavidProcessing, setIsDavidProcessing] = useState(false);
   
@@ -66,7 +66,7 @@ export default function VoiceScreen({ navigation }: any) {
     }
   };
 
-  const getAudioContext = (sampleRate = 16000) => {
+  const getAudioContext = (sampleRate = 24000) => {
     if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
       audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate });
       addLog(`AudioContext created (${sampleRate}Hz)`);
@@ -114,101 +114,152 @@ export default function VoiceScreen({ navigation }: any) {
 
       const ai = new GoogleGenAI({ apiKey });
       
-      const VOICE_MODEL = "gemini-2.5-flash-native-audio-preview-12-2025";
+      const VOICE_MODEL_PRIMARY = "gemini-2.5-flash-native-audio-preview-12-2025";
+      const VOICE_MODEL_FALLBACK = "gemini-2.5-flash-native-audio-preview-09-2025";
       const DAVID_VOICE = "Zephyr";
 
-      addLog(`Starting Live connection (${VOICE_MODEL})...`);
-      const session = await ai.live.connect({
-        model: VOICE_MODEL,
-        config: {
-          responseModalities: [Modality.AUDIO],
-          speechConfig: {
-            voiceConfig: {
-              prebuiltVoiceConfig: {
-                voiceName: DAVID_VOICE,
+      const connectWithModel = async (modelName: string) => {
+        addLog(`Starting Live connection (${modelName})...`);
+        return await ai.live.connect({
+          model: modelName,
+          config: {
+            responseModalities: [Modality.AUDIO],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: {
+                  voiceName: DAVID_VOICE,
+                },
               },
             },
-          },
-          systemInstruction: "You are David, a warm, compassionate AI Bible companion. This is a real-time voice conversation. Respond naturally and warmly. Keep responses concise (1-2 sentences).",
-        } as any,
-        callbacks: {
-          onopen: () => {
-            addLog("live session connected (WebSocket opened)");
-            setIsConnected(true);
-            setIsConnecting(false);
-            startAudioCapture();
-          },
-          onmessage: async (message: any) => {
-            if (message.setupComplete) {
-              addLog("Model setup complete");
-            }
-            
-            if (message.serverContent?.modelTurn) {
-              addLog("model response received (modelTurn)");
-              setIsDavidThinking(false);
-              setIsDavidProcessing(false);
-              const parts = message.serverContent.modelTurn.parts;
-              if (parts) {
-                addLog(`Response has ${parts.length} parts`);
-                for (const part of parts) {
-                  if (part.inlineData?.data) {
-                    addLog(`audio response received: ${part.inlineData.data.length} base64 chars`);
-                    audioQueue.current.push(part.inlineData.data);
-                    processAudioQueue();
-                  }
-                  if (part.text) {
-                    addLog(`text response received: "${part.text}"`);
-                    setLastResponseText(part.text);
+            systemInstruction: "You are David, a warm, compassionate AI Bible companion. This is a real-time voice conversation. Respond naturally and warmly. Keep responses very concise (1-2 sentences). Focus on spiritual encouragement.",
+          } as any,
+          callbacks: {
+            onopen: () => {
+              addLog(`live session connected with ${modelName}`);
+              setIsConnected(true);
+              setIsConnecting(false);
+              startAudioCapture();
+            },
+            onmessage: async (message: any) => {
+              try {
+                const msgType = Object.keys(message).join(', ');
+                addLog(`onmessage: [${msgType}]`);
+                
+                // Log full structure for first few messages to debug
+                if (debugLogs.length < 10) {
+                  console.log("[VoiceDebug] Full message structure:", JSON.stringify(message, (key, value) => 
+                    key === 'data' && typeof value === 'string' ? `${value.substring(0, 20)}...` : value
+                  ));
+                }
+
+                if (message.setupComplete) {
+                  addLog("Model setup complete");
+                }
+                
+                // Exhaustive search for audio data
+                let audioData: string | null = null;
+                let textData: string | null = null;
+
+                // Standard path
+                if (message.serverContent?.modelTurn?.parts) {
+                  for (const part of message.serverContent.modelTurn.parts) {
+                    if (part.inlineData?.data) {
+                      audioData = part.inlineData.data;
+                    }
+                    if (part.text) {
+                      textData = part.text;
+                    }
                   }
                 }
-              } else {
-                addLog("Response has no parts");
-              }
-            }
+                
+                // Alternative paths (just in case)
+                if (!audioData && message.audio?.data) audioData = message.audio.data;
+                if (!audioData && message.data) audioData = message.data;
+                if (!textData && message.text) textData = message.text;
 
-            if (message.serverContent?.userTurn) {
-              const userText = message.serverContent.userTurn.parts?.[0]?.text;
-              if (userText) {
-                addLog(`transcript received: "${userText}"`);
-                setIsDavidProcessing(true);
+                if (audioData) {
+                  addLog(`audio chunk detected: ${audioData.length} bytes (base64)`);
+                  audioQueue.current.push(audioData);
+                  // Ensure AudioContext is ready before processing
+                  const context = getAudioContext();
+                  if (context.state === 'suspended') {
+                    await context.resume();
+                    addLog(`AudioContext resumed before playback: ${context.state}`);
+                  }
+                  processAudioQueue();
+                }
+
+                if (textData) {
+                  addLog(`text response received: "${textData}"`);
+                  setLastResponseText(textData);
+                }
+
+                if (message.serverContent?.userTurn) {
+                  const userText = message.serverContent.userTurn.parts?.[0]?.text;
+                  if (userText) {
+                    addLog(`transcript received: "${userText}"`);
+                    setIsDavidProcessing(true);
+                  }
+                }
+                
+                if (message.serverContent?.interrupted) {
+                  addLog("Model interrupted by user speech");
+                  setIsDavidSpeaking(false);
+                  setIsDavidThinking(false);
+                  setIsDavidProcessing(false);
+                  audioQueue.current = [];
+                  // Stop current audio if playing
+                  stopAllAudio();
+                }
+              } catch (err) {
+                addLog(`onmessage error: ${err}`);
               }
-            }
-            
-            if (message.serverContent?.interrupted) {
-              addLog("Model interrupted by user speech");
-              setIsDavidSpeaking(false);
+            },
+            onclose: (event: any) => {
+              const reason = event?.reason || 'No reason';
+              addLog(`websocket/session closed: ${reason}`);
+              setIsConnected(false);
+              setIsConnecting(false);
               setIsDavidThinking(false);
+              setIsDavidSpeaking(false);
               setIsDavidProcessing(false);
-              audioQueue.current = [];
-              // Stop current audio if playing
-              stopAllAudio();
-            }
+              stopAudioCapture();
+            },
+            onerror: (err: any) => {
+              const errorMsg = err?.message || "Unknown WebSocket error";
+              addLog(`WebSocket failed: ${errorMsg}`);
+              console.error("Live API Error:", err);
+              setIsConnecting(false);
+              setIsConnected(false);
+              setIsDavidThinking(false);
+              setIsDavidSpeaking(false);
+              setIsDavidProcessing(false);
+              setError(`Connection error: ${errorMsg}`);
+              stopAudioCapture();
+            },
           },
-          onclose: (event: any) => {
-            const reason = event?.reason || 'No reason';
-            addLog(`websocket/session closed: ${reason}`);
-            setIsConnected(false);
+        });
+      };
+
+      try {
+        sessionRef.current = await connectWithModel(VOICE_MODEL_PRIMARY);
+      } catch (primaryErr: any) {
+        const isUnavailable = primaryErr?.message?.includes('503') || primaryErr?.message?.includes('unavailable');
+        if (isUnavailable) {
+          addLog("Primary model unavailable, trying fallback...");
+          try {
+            sessionRef.current = await connectWithModel(VOICE_MODEL_FALLBACK);
+          } catch (fallbackErr: any) {
+            addLog(`Fallback failed: ${fallbackErr.message}`);
+            setError("David is currently resting (service unavailable). Please try again in a few minutes.");
             setIsConnecting(false);
-            setIsDavidThinking(false);
-            setIsDavidSpeaking(false);
-            setIsDavidProcessing(false);
-            stopAudioCapture();
-          },
-          onerror: (err: any) => {
-            const errorMsg = err?.message || "Unknown WebSocket error";
-            addLog(`WebSocket failed: ${errorMsg}`);
-            console.error("Live API Error:", err);
-            setIsConnecting(false);
-            setIsConnected(false);
-            setIsDavidThinking(false);
-            setIsDavidSpeaking(false);
-            setIsDavidProcessing(false);
-            setError(`Connection error: ${errorMsg}`);
-            stopAudioCapture();
           }
+        } else {
+          addLog(`Connection failed: ${primaryErr.message}`);
+          setError(`Connection failed: ${primaryErr.message}`);
+          setIsConnecting(false);
         }
-      });
-      sessionRef.current = session;
+      }
     } catch (error: any) {
       addLog(`Setup error: ${error?.message}`);
       console.error(error);
@@ -245,6 +296,7 @@ export default function VoiceScreen({ navigation }: any) {
       // Use 16000 for input as required by the API
       // Reduced buffer size to 1024 for more frequent updates
       const processor = audioContext.createScriptProcessor(1024, 1, 1);
+      addLog("ScriptProcessorNode created (1024 buffer size)");
       processorRef.current = processor;
 
       let silenceFrames = 0;
@@ -304,6 +356,7 @@ export default function VoiceScreen({ navigation }: any) {
       silentGain.gain.value = 0;
       processor.connect(silentGain);
       silentGain.connect(audioContext.destination);
+      addLog("Microphone connected to processor and silent destination");
       
       setIsListening(true);
       addLog("Audio capture started");
@@ -381,46 +434,120 @@ export default function VoiceScreen({ navigation }: any) {
     
     try {
       const context = getAudioContext(24000);
+      addLog(`AudioContext state before playback: ${context.state}`);
+      if (context.state === 'suspended') {
+        await context.resume();
+        addLog(`AudioContext state after resume: ${context.state}`);
+      }
       
       // Decode base64 to binary
       const binaryString = atob(base64Data);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
+      const len = binaryString.length;
+      const bytes = new Uint8Array(len);
+      for (let i = 0; i < len; i++) {
         bytes[i] = binaryString.charCodeAt(i);
       }
       
+      // Ensure we have an even number of bytes for Int16Array
+      const pcm16Len = Math.floor(len / 2);
+      const pcm16 = new Int16Array(bytes.buffer, 0, pcm16Len);
+      
       // Convert PCM16 (little-endian) to Float32
-      const pcm16 = new Int16Array(bytes.buffer);
-      const float32 = new Float32Array(pcm16.length);
-      for (let i = 0; i < pcm16.length; i++) {
+      const float32 = new Float32Array(pcm16Len);
+      for (let i = 0; i < pcm16Len; i++) {
         float32[i] = pcm16[i] / 32768.0;
       }
+      
+      addLog("PCM decoded successfully");
       
       // Create AudioBuffer
       const audioBuffer = context.createBuffer(1, float32.length, 24000);
       audioBuffer.getChannelData(0).set(float32);
+      addLog(`AudioBuffer created: duration=${audioBuffer.duration.toFixed(3)}s`);
       
       // Create Source
       const source = context.createBufferSource();
       source.buffer = audioBuffer;
-      source.connect(context.destination);
       
-      const startTime = nextStartTimeRef.current;
+      // Verify connection
+      source.connect(context.destination);
+      addLog("node connected to audioContext.destination");
+      
+      const startTime = Math.max(context.currentTime, nextStartTimeRef.current);
       source.start(startTime);
+      addLog(`Playback started: start=${startTime.toFixed(3)}s, now=${context.currentTime.toFixed(3)}s`);
+      
       activeSourcesRef.current.push(source);
       
       // Update next start time
-      nextStartTimeRef.current += audioBuffer.duration;
+      nextStartTimeRef.current = startTime + audioBuffer.duration;
       
       // Cleanup source from active list when done
       source.onended = () => {
+        addLog("Playback ended");
         activeSourcesRef.current = activeSourcesRef.current.filter(s => s !== source);
+        if (activeSourcesRef.current.length === 0 && audioQueue.current.length === 0) {
+          setIsDavidSpeaking(false);
+        }
       };
       
+      setIsDavidSpeaking(true);
     } catch (err) {
-      addLog(`audio playback failed: ${err}`);
+      addLog(`decode/playback failure: ${err}`);
       console.error("Error playing audio chunk:", err);
+      
+      // Fallback to WAV Blob playback if Web Audio fails
+      try {
+        addLog("Attempting WAV fallback...");
+        playAudioWavFallback(base64Data);
+      } catch (fallbackErr) {
+        addLog(`WAV fallback failed: ${fallbackErr}`);
+      }
     }
+  };
+
+  const playAudioWavFallback = (base64Data: string) => {
+    // Basic WAV header for 24kHz Mono PCM16
+    const sampleRate = 24000;
+    const numChannels = 1;
+    const bitsPerSample = 16;
+    
+    const binaryString = atob(base64Data);
+    const dataLen = binaryString.length;
+    const buffer = new ArrayBuffer(44 + dataLen);
+    const view = new DataView(buffer);
+    
+    // RIFF identifier
+    view.setUint32(0, 0x52494646, false); // "RIFF"
+    view.setUint32(4, 36 + dataLen, true);
+    view.setUint32(8, 0x57415645, false); // "WAVE"
+    
+    // "fmt " chunk
+    view.setUint32(12, 0x666d7420, false);
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); // PCM
+    view.setUint16(22, numChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * numChannels * (bitsPerSample / 8), true);
+    view.setUint16(32, numChannels * (bitsPerSample / 8), true);
+    view.setUint16(34, bitsPerSample, true);
+    
+    // "data" chunk
+    view.setUint32(36, 0x64617461, false);
+    view.setUint32(40, dataLen, true);
+    
+    for (let i = 0; i < dataLen; i++) {
+      view.setUint8(44 + i, binaryString.charCodeAt(i));
+    }
+    
+    const blob = new Blob([buffer], { type: 'audio/wav' });
+    const url = URL.createObjectURL(blob);
+    const audio = new Audio(url);
+    audio.play().then(() => {
+      addLog("WAV fallback playback started");
+    }).catch(e => {
+      addLog(`WAV fallback play error: ${e}`);
+    });
   };
 
   const testAudio = async () => {
@@ -575,8 +702,13 @@ export default function VoiceScreen({ navigation }: any) {
 
       {showDebug && (
         <View style={styles.debugPanel}>
-          <Text style={styles.debugTitle}>Debug Logs</Text>
-          <ScrollView style={styles.debugScroll}>
+          <View style={styles.debugHeader}>
+            <Text style={styles.debugTitle}>Debug Logs</Text>
+            <TouchableOpacity onPress={() => setDebugLogs([])}>
+              <Text style={styles.debugClear}>Clear</Text>
+            </TouchableOpacity>
+          </View>
+          <ScrollView style={styles.debugScroll} contentContainerStyle={{ paddingBottom: 20 }}>
             {debugLogs.map((log, i) => (
               <Text key={i} style={styles.debugLog}>{`> ${log}`}</Text>
             ))}
@@ -781,27 +913,44 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   debugPanel: {
-    width: '100%',
-    height: 150,
-    backgroundColor: 'rgba(0, 0, 0, 0.8)',
-    borderRadius: 12,
-    marginTop: 15,
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 250,
+    backgroundColor: 'rgba(0, 0, 0, 0.95)',
     padding: 10,
-    borderWidth: 1,
-    borderColor: 'rgba(212, 175, 55, 0.2)',
+    borderTopWidth: 2,
+    borderTopColor: '#d4af37',
+    zIndex: 1000,
+  },
+  debugHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(212, 175, 55, 0.3)',
+    paddingBottom: 4,
+  },
+  debugClear: {
+    color: '#ef4444',
+    fontSize: 10,
+    fontWeight: 'bold',
+    textTransform: 'uppercase',
   },
   debugTitle: {
     color: '#d4af37',
     fontSize: 10,
     fontWeight: 'bold',
-    marginBottom: 5,
     textTransform: 'uppercase',
+    letterSpacing: 1,
   },
   debugScroll: {
     flex: 1,
   },
   debugLog: {
-    color: '#00ff00',
+    color: '#4ade80',
     fontSize: 9,
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
     marginBottom: 2,
