@@ -3,7 +3,7 @@ import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, Keyboa
 import { Send, Mic, ThumbsUp, ThumbsDown, Volume2, Square, VolumeX } from 'lucide-react';
 import { getChatResponse, getChatResponseStream, generateSpeech } from '../services/gemini';
 import { ChatMessage, Profile } from '../types';
-import { supabase } from '../services/supabase';
+import { supabase, saveAIFeedback } from '../services/supabase';
 import { useMusic } from '../MusicContext';
 import { findSong, extractSongTitle, openYouTubeSearch } from '../utils/music';
 
@@ -101,7 +101,7 @@ export default function ChatScreen({ navigation }: any) {
           newMessages[modelMessageIndex] = { role: 'model', content: fullText };
           return newMessages;
         });
-      });
+      }, profile?.preferred_response_length || 'short');
       
       if (response) {
         // Check David's response for song triggers
@@ -157,10 +157,17 @@ export default function ChatScreen({ navigation }: any) {
     }
   };
 
-  const handleFeedback = (index: number, type: 'up' | 'down') => {
+  const handleFeedback = async (index: number, type: 'up' | 'down') => {
+    const message = messages[index];
+    if (!message || message.role !== 'model' || !profile) return;
+
+    const isHelpful = type === 'up';
+    
     setMessages(prev => prev.map((msg, i) => 
       i === index ? { ...msg, feedback: msg.feedback === type ? undefined : type } : msg
     ));
+
+    await saveAIFeedback(profile.id, 'chat', message.content, isHelpful);
   };
 
   const stopSpeaking = () => {

@@ -77,7 +77,8 @@ export default function OnboardingScreen({ onComplete }: { onComplete: () => voi
             .from('profiles')
             .update({ 
               has_completed_onboarding: true,
-              preferred_translation: selectedTranslation 
+              preferred_translation: selectedTranslation,
+              preferred_response_length: 'short'
             })
             .eq('id', user.id);
           

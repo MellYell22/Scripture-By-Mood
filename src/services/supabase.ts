@@ -35,3 +35,21 @@ export const getProfile = async (userId: string) => {
   if (error) throw error;
   return data;
 };
+
+export const saveAIFeedback = async (userId: string, responseType: 'chat' | 'mood', responseText: string, isHelpful: boolean) => {
+  if (!supabase) return;
+  
+  const { error } = await supabase
+    .from('ai_feedback')
+    .insert({
+      user_id: userId,
+      response_type: responseType,
+      response_text: responseText,
+      is_helpful: isHelpful,
+      created_at: new Date().toISOString()
+    });
+  
+  if (error) {
+    console.error('Error saving AI feedback:', error);
+  }
+};

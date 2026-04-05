@@ -1,5 +1,5 @@
 import { GoogleGenAI, Type, Modality } from "@google/genai";
-import { MoodResponse } from "../types";
+import { MoodResponse, ResponseLength } from "../types";
 
 const getAI = () => {
   const apiKey = 
@@ -17,10 +17,16 @@ const getAI = () => {
   return new GoogleGenAI({ apiKey });
 };
 
-export const getMoodScriptures = async (mood: string, translation: string = 'KJV'): Promise<MoodResponse> => {
+export const getMoodScriptures = async (mood: string, translation: string = 'NIV', responseLength: ResponseLength = 'short'): Promise<MoodResponse> => {
   const ai = getAI();
   const model = "gemini-3-flash-preview";
   
+  const lengthInstruction = {
+    short: "Keep the encouragement paragraph exactly 2-3 sentences long.",
+    medium: "Keep the encouragement paragraph exactly 4-5 sentences long.",
+    long: "Keep the encouragement paragraph exactly 6-8 sentences long."
+  }[responseLength];
+
   const response = await ai.models.generateContent({
     model,
     contents: `You are David, a deeply empathetic, spiritually grounded AI assistant. The user is feeling: ${mood}. 
@@ -31,13 +37,16 @@ export const getMoodScriptures = async (mood: string, translation: string = 'KJV
     3. Respond only to what is written.
 
     Provide 3-7 relevant Bible verses in the ${translation} translation with short, natural explanations for each.
+    For each scripture reference, ALWAYS include the full citation and append the translation in parentheses, e.g., "Philippians 4:6-7 (${translation})".
+    If the translation is not explicitly stated in the reference, use ${translation}.
+
     Also provide a 'grounding encouragement' paragraph that follows these rules:
     1. Use accurate empathy: Use phrases like "I hear you", "I understand", or "That sounds really heavy" when appropriate.
     2. Speak naturally, like a real person thinking and talking — use light pauses like “...”, “you know”, “I understand”.
     3. Keep it emotionally warm, personal, and supportive — not robotic or preachy.
     4. Acknowledge the user's feeling (${mood}) with empathy.
     5. Briefly explain how the scriptures apply to their situation.
-    6. The paragraph must be exactly 3–4 sentences long.`,
+    6. ${lengthInstruction}`,
     config: {
       responseMimeType: "application/json",
       responseSchema: {
@@ -85,10 +94,22 @@ CRITICAL RULES:
   return response.text || "I am reflecting on this beautiful verse. May it bring you peace today.";
 };
 
-export const getChatResponse = async (history: { role: 'user' | 'model', parts: { text: string }[] }[]) => {
+export const getChatResponse = async (history: { role: 'user' | 'model', parts: { text: string }[] }[], responseLength: ResponseLength = 'short') => {
   const ai = getAI();
   const model = "gemini-3-flash-preview";
   
+  const lengthInstruction = {
+    short: "ALWAYS respond with exactly 2–3 sentences. This is critical for both depth and speed.",
+    medium: "ALWAYS respond with exactly 4–5 sentences. This is critical for depth.",
+    long: "ALWAYS respond with exactly 6–8 sentences. This is critical for thoroughness."
+  }[responseLength];
+
+  const structureInstruction = {
+    short: "1. Empathy/Acknowledgment (1 sentence)\n2. Scripture + Brief Application (1 sentence)\n3. Follow-up Question (1 sentence)",
+    medium: "1. Empathy/Acknowledgment (1 sentence)\n2. Scripture + Brief Application (2-3 sentences)\n3. Follow-up Question (1 sentence)",
+    long: "1. Empathy/Acknowledgment (1-2 sentences)\n2. Scripture + Brief Application (4-5 sentences)\n3. Follow-up Question (1 sentence)"
+  }[responseLength];
+
   // The last message is the one we send, the rest is history
   const chatHistory = history.slice(0, -1);
   const lastMessage = history[history.length - 1].parts[0].text;
@@ -114,21 +135,20 @@ MUSIC CAPABILITIES:
 
 CRITICAL RULES:
 1. NEVER give short or vague responses.
-2. ALWAYS respond with exactly 3–4 sentences. This is critical for both depth and speed.
-3. When the user expresses a feeling (sad, anxious, lonely, etc.):
+2. ${lengthInstruction}
+3. When sharing scripture, ALWAYS include the full citation and translation in parentheses, e.g., "Philippians 4:6-7 (NIV)".
+4. When the user expresses a feeling (sad, anxious, lonely, etc.):
    - Use accurate empathy: Use phrases like "I hear you", "I understand", or "That sounds really heavy".
    - Acknowledge the feeling naturally (don't just say "I'm sorry").
    - Provide a relevant Bible verse.
    - Briefly explain the verse in a conversational way.
    - Ask a thoughtful follow-up question.
-4. Speak naturally, like a real person thinking and talking — use light pauses like “...”, “you know”, “I understand”.
-5. Keep responses emotionally warm, personal, and supportive — not robotic or preachy.
-6. Responses must feel like a real back-and-forth conversation, not a lecture.
+5. Speak naturally, like a real person thinking and talking — use light pauses like “...”, “you know”, “I understand”.
+6. Keep responses emotionally warm, personal, and supportive — not robotic or preachy.
+7. Responses must feel like a real back-and-forth conversation, not a lecture.
 
-RESPONSE STRUCTURE (Strictly 3-4 sentences):
-1. Empathy/Acknowledgment (1 sentence)
-2. Scripture + Brief Application (1-2 sentences)
-3. Follow-up Question (1 sentence)`,
+RESPONSE STRUCTURE (Strictly follow sentence count):
+${structureInstruction}`,
     }
   });
 
@@ -138,11 +158,24 @@ RESPONSE STRUCTURE (Strictly 3-4 sentences):
 
 export const getChatResponseStream = async (
   history: { role: 'user' | 'model', parts: { text: string }[] }[],
-  onChunk: (text: string) => void
+  onChunk: (text: string) => void,
+  responseLength: ResponseLength = 'short'
 ) => {
   const ai = getAI();
   const model = "gemini-3-flash-preview";
   
+  const lengthInstruction = {
+    short: "ALWAYS respond with exactly 2–3 sentences. This is critical for both depth and speed.",
+    medium: "ALWAYS respond with exactly 4–5 sentences. This is critical for depth.",
+    long: "ALWAYS respond with exactly 6–8 sentences. This is critical for thoroughness."
+  }[responseLength];
+
+  const structureInstruction = {
+    short: "1. Empathy/Acknowledgment (1 sentence)\n2. Scripture + Brief Application (1 sentence)\n3. Follow-up Question (1 sentence)",
+    medium: "1. Empathy/Acknowledgment (1 sentence)\n2. Scripture + Brief Application (2-3 sentences)\n3. Follow-up Question (1 sentence)",
+    long: "1. Empathy/Acknowledgment (1-2 sentences)\n2. Scripture + Brief Application (4-5 sentences)\n3. Follow-up Question (1 sentence)"
+  }[responseLength];
+
   const chatHistory = history.slice(0, -1);
   const lastMessage = history[history.length - 1].parts[0].text;
 
@@ -167,21 +200,20 @@ MUSIC CAPABILITIES:
 
 CRITICAL RULES:
 1. NEVER give short or vague responses.
-2. ALWAYS respond with exactly 3–4 sentences. This is critical for both depth and speed.
-3. When the user expresses a feeling (sad, anxious, lonely, etc.):
+2. ${lengthInstruction}
+3. When sharing scripture, ALWAYS include the full citation and translation in parentheses, e.g., "Philippians 4:6-7 (NIV)".
+4. When the user expresses a feeling (sad, anxious, lonely, etc.):
    - Use accurate empathy: Use phrases like "I hear you", "I understand", or "That sounds really heavy".
    - Acknowledge the feeling naturally (don't just say "I'm sorry").
    - Provide a relevant Bible verse.
    - Briefly explain the verse in a conversational way.
    - Ask a thoughtful follow-up question.
-4. Speak naturally, like a real person thinking and talking — use light pauses like “...”, “you know”, “I understand”.
-5. Keep responses emotionally warm, personal, and supportive — not robotic or preachy.
-6. Responses must feel like a real back-and-forth conversation, not a lecture.
+5. Speak naturally, like a real person thinking and talking — use light pauses like “...”, “you know”, “I understand”.
+6. Keep responses emotionally warm, personal, and supportive — not robotic or preachy.
+7. Responses must feel like a real back-and-forth conversation, not a lecture.
 
-RESPONSE STRUCTURE (Strictly 3-4 sentences):
-1. Empathy/Acknowledgment (1 sentence)
-2. Scripture + Brief Application (1-2 sentences)
-3. Follow-up Question (1 sentence)`,
+RESPONSE STRUCTURE (Strictly follow sentence count):
+${structureInstruction}`,
     }
   });
 

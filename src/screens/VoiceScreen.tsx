@@ -1,15 +1,16 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, Platform, ScrollView } from 'react-native';
-import { Mic, MicOff, Lock, Sparkles } from 'lucide-react';
+import { Mic, MicOff, Lock, Sparkles, ThumbsUp, ThumbsDown } from 'lucide-react';
 import { motion, AnimatePresence } from "motion/react";
 import { supabase } from '../services/supabase';
 
 const MotionView = motion(View);
-import { Profile } from '../types';
+import { Profile, ResponseLength } from '../types';
 import { GoogleGenAI, Modality, StartSensitivity, EndSensitivity } from "@google/genai";
 import { hasProAccess } from '../utils/tier';
 import { useMusic } from '../MusicContext';
 import { findSong, extractSongTitle, openYouTubeSearch } from '../utils/music';
+import { saveAIFeedback } from '../services/supabase';
 
 import { MOODS_DATA } from '../constants/moods';
 import { WORSHIP_SONGS } from '../constants/songs';
@@ -29,8 +30,9 @@ export default function VoiceScreen({ route, navigation }: any) {
   const [showDebug, setShowDebug] = useState(false);
   const [lastResponseText, setLastResponseText] = useState<string | null>(null);
   const [isDavidProcessing, setIsDavidProcessing] = useState(false);
-  const [messages, setMessages] = useState<{ role: 'user' | 'david', text: string }[]>([]);
+  const [messages, setMessages] = useState<{ role: 'user' | 'david', text: string, feedback?: 'up' | 'down' }[]>([]);
   const [currentDavidResponse, setCurrentDavidResponse] = useState("");
+  const [lastFeedback, setLastFeedback] = useState<'up' | 'down' | null>(null);
   
   const sessionRef = useRef<any>(null);
   const davidResponseRef = useRef("");
@@ -175,6 +177,12 @@ Acknowledge this feeling warmly and immediately.`;
           }
         }
 
+        const lengthInstruction = {
+          short: "BE CONCISE: Exactly 2–3 sentences. Never more.",
+          medium: "BE MODERATE: Exactly 4–5 sentences.",
+          long: "BE THOROUGH: Exactly 6–8 sentences."
+        }[(profile?.preferred_response_length as ResponseLength) || 'short'];
+
         return await ai.live.connect({
           model: modelName,
             config: {
@@ -196,18 +204,19 @@ ${moodContext}
 
 STRICT RESPONSE RULES:
 - BE FAST: Start your response immediately. No filler, no "I'm sorry you feel that way" without substance.
-- BE CONCISE: Exactly 2–4 sentences. Never more.
+- ${lengthInstruction}
 - BE SPECIFIC: Address exactly what the user said with deep empathy.
 - EMOTIONAL INTELLIGENCE: Use phrases like "I hear you", "I understand", or "That sounds really heavy" to validate their feelings before moving to scripture.
 - SCRIPTURE FIRST: If the user expresses sadness, anxiety, fear, loneliness, heartbreak, stress, guilt, or hopelessness, you MUST:
   1. Validate the feeling (e.g., "I hear you, that sounds really heavy...").
   2. Share one relevant Bible verse immediately.
-  3. Briefly explain why it fits their feeling in a natural, caring way.
+  3. ALWAYS include the full citation and translation in parentheses, e.g., "Philippians 4:6-7 (NIV)".
+  4. Briefly explain why it fits their feeling in a natural, caring way.
 - TONE: Warm, human, and direct. Not a preacher, not a robot.
 - NO META-TALK: Never say "I am thinking" or "Here is a verse". Just speak.
 - FALLBACK: If you need a moment to think, start with a short meaningful opening like "I hear you," or "Let's look at what God says," and then continue immediately into the verse. Never leave silence hanging.
 
-Example for "I feel anxious": "I hear you, and I understand how heavy that weight can feel. Philippians 4:6–7 reminds us not to be anxious, but to bring everything to God in prayer, and that His peace guards our hearts and minds. You do not have to carry this alone right now."`,
+Example for "I feel anxious": "I hear you, and I understand how heavy that weight can feel. Philippians 4:6–7 (NIV) reminds us not to be anxious, but to bring everything to God in prayer, and that His peace guards our hearts and minds. You do not have to carry this alone right now."`,
             } as any,
           callbacks: {
             onopen: () => {
@@ -392,6 +401,25 @@ Example for "I feel anxious": "I hear you, and I understand how heavy that weigh
     }
     stopAudioCapture();
     setIsConnected(false);
+  };
+
+  const handleFeedback = async (index: number | 'last', type: 'up' | 'down') => {
+    const isHelpful = type === 'up';
+    
+    if (index === 'last') {
+      if (!lastResponseText || !profile) return;
+      setLastFeedback(type);
+      await saveAIFeedback(profile.id, 'chat', lastResponseText, isHelpful);
+    } else {
+      const message = messages[index];
+      if (!message || message.role !== 'david' || !profile) return;
+
+      setMessages(prev => prev.map((msg, i) => 
+        i === index ? { ...msg, feedback: msg.feedback === type ? undefined : type } : msg
+      ));
+
+      await saveAIFeedback(profile.id, 'chat', message.text, isHelpful);
+    }
   };
 
   const startAudioCapture = async () => {
@@ -802,7 +830,17 @@ Example for "I feel anxious": "I hear you, and I understand how heavy that weigh
           animate={{ opacity: 1, y: 0 }}
           style={styles.textFallbackContainer}
         >
-          <Text style={styles.textFallbackLabel}>David says:</Text>
+          <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' }}>
+            <Text style={styles.textFallbackLabel}>David says:</Text>
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              <TouchableOpacity onPress={() => handleFeedback('last', 'up')}>
+                <ThumbsUp size={14} color={lastFeedback === 'up' ? '#d4af37' : 'rgba(212, 175, 55, 0.4)'} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => handleFeedback('last', 'down')}>
+                <ThumbsDown size={14} color={lastFeedback === 'down' ? '#ef4444' : 'rgba(212, 175, 55, 0.4)'} />
+              </TouchableOpacity>
+            </View>
+          </View>
           <Text style={styles.textFallbackContent}>{lastResponseText}</Text>
         </MotionView>
       )}

@@ -5,8 +5,8 @@ import { getMoodScriptures, generateSpeech } from '../services/gemini';
 
 const MotionView = motion(View);
 import { MoodResponse } from '../types';
-import { Sparkles, Search, Volume2, Music, Play, Pause, Frown, Wind, User, Heart, Flame, Sun, HelpCircle, Layers, Cloud, X } from 'lucide-react';
-import { supabase } from '../services/supabase';
+import { Sparkles, Search, Volume2, Music, Play, Pause, Frown, Wind, User, Heart, Flame, Sun, HelpCircle, Layers, Cloud, X, ThumbsUp, ThumbsDown } from 'lucide-react';
+import { supabase, saveAIFeedback } from '../services/supabase';
 import { Profile } from '../types';
 import { MOODS_DATA, MoodData } from '../constants/moods';
 import { WORSHIP_SONGS, Song } from '../constants/songs';
@@ -83,6 +83,7 @@ export default function MoodScreen({ route, navigation }: any) {
   const [searchQuery, setSearchQuery] = useState('');
   const [loading, setLoading] = useState(false);
   const [result, setResult] = useState<MoodResponse | null>(null);
+  const [feedback, setFeedback] = useState<'up' | 'down' | null>(null);
   const [testamentFilter, setTestamentFilter] = useState<'all' | 'old' | 'new'>('all');
   
   const [readingMode, setReadingMode] = useState<ReadingMode>('sanctuary');
@@ -127,8 +128,13 @@ export default function MoodScreen({ route, navigation }: any) {
           setProfile(data);
         }
       }
-      const data = await getMoodScriptures(initialMood, currentProfile?.preferred_translation || 'KJV');
+      const data = await getMoodScriptures(
+        initialMood, 
+        currentProfile?.preferred_translation || 'KJV',
+        currentProfile?.preferred_response_length || 'short'
+      );
       setResult(data);
+      setFeedback(null);
     } catch (error) {
       console.error(error);
     } finally {
@@ -167,8 +173,13 @@ export default function MoodScreen({ route, navigation }: any) {
     setLoading(true);
     setMood(query);
     setTestamentFilter('all');
+    setFeedback(null);
     try {
-      const data = await getMoodScriptures(query, profile?.preferred_translation || 'KJV');
+      const data = await getMoodScriptures(
+        query, 
+        profile?.preferred_translation || 'KJV',
+        profile?.preferred_response_length || 'short'
+      );
       setResult(data);
     } catch (error) {
       alert('Failed to fetch scriptures. Please try again.');
@@ -226,6 +237,15 @@ export default function MoodScreen({ route, navigation }: any) {
       console.error("Speech error:", error);
       setIsSpeaking(false);
     }
+  };
+
+  const handleFeedback = async (type: 'up' | 'down') => {
+    if (!result || !profile) return;
+    
+    const isHelpful = type === 'up';
+    setFeedback(type);
+    
+    await saveAIFeedback(profile.id, 'mood', result.encouragement, isHelpful);
   };
 
   return (
@@ -330,6 +350,25 @@ export default function MoodScreen({ route, navigation }: any) {
               <Text style={[styles.encouragementText, { color: theme.text, fontSize: fonts.verse - 2, fontFamily: 'Playfair Display' }]}>
                 {result.encouragement}
               </Text>
+              
+              <View style={styles.feedbackContainer}>
+                <Text style={[styles.feedbackLabel, { color: theme.muted }]}>Was this helpful?</Text>
+                <View style={styles.feedbackButtons}>
+                  <TouchableOpacity 
+                    onPress={() => handleFeedback('up')}
+                    style={[styles.feedbackButton, feedback === 'up' && { backgroundColor: 'rgba(16, 185, 129, 0.2)' }]}
+                  >
+                    <ThumbsUp size={16} color={feedback === 'up' ? '#10B981' : theme.muted} />
+                  </TouchableOpacity>
+                  <TouchableOpacity 
+                    onPress={() => handleFeedback('down')}
+                    style={[styles.feedbackButton, feedback === 'down' && { backgroundColor: 'rgba(239, 68, 68, 0.2)' }]}
+                  >
+                    <ThumbsDown size={16} color={feedback === 'down' ? '#ef4444' : theme.muted} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+
               <TouchableOpacity 
                 style={[styles.chatButton, { borderColor: theme.accent }]}
                 onPress={() => navigation.navigate('Voice', { mood: mood })}
@@ -680,6 +719,27 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: 'bold',
     letterSpacing: 1,
+  },
+  feedbackContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 15,
+    gap: 10,
+  },
+  feedbackLabel: {
+    fontSize: 10,
+    fontStyle: 'italic',
+  },
+  feedbackButtons: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  feedbackButton: {
+    padding: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(212, 175, 55, 0.1)',
   },
   verseActions: {
     flexDirection: 'row',

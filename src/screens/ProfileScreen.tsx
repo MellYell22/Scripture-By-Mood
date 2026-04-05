@@ -65,6 +65,25 @@ export default function ProfileScreen() {
     }
   };
 
+  const updatePreference = async (field: string, value: any) => {
+    if (!profile) return;
+    setLoading(true);
+    try {
+      const { error } = await supabase
+        .from('profiles')
+        .update({ [field]: value })
+        .eq('id', profile.id);
+      
+      if (error) throw error;
+      setProfile({ ...profile, [field]: value });
+      setStatusMessage({ text: 'Preferences updated!', type: 'success' });
+    } catch (error: any) {
+      setStatusMessage({ text: error.message, type: 'error' });
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.header}>
@@ -85,6 +104,43 @@ export default function ProfileScreen() {
           <Text style={[styles.statusText, styles[`${statusMessage.type}Text`]]}>{statusMessage.text}</Text>
         </View>
       )}
+
+      <Text style={styles.sectionTitle}>AI Preferences</Text>
+      <View style={styles.settingsCard}>
+        <Text style={styles.settingsLabel}>Response Length</Text>
+        <View style={styles.optionsRow}>
+          {['short', 'medium', 'long'].map((length) => {
+            const isPro = hasProAccess(profile);
+            const isDisabled = length !== 'short' && !isPro;
+            const isSelected = profile?.preferred_response_length === length;
+
+            return (
+              <TouchableOpacity
+                key={length}
+                style={[
+                  styles.optionButton,
+                  isSelected && styles.optionButtonActive,
+                  isDisabled && styles.optionButtonDisabled
+                ]}
+                onPress={() => !isDisabled && updatePreference('preferred_response_length', length)}
+                disabled={loading}
+              >
+                <Text style={[
+                  styles.optionText,
+                  isSelected && styles.optionTextActive,
+                  isDisabled && styles.optionTextDisabled
+                ]}>
+                  {length.toUpperCase()}
+                </Text>
+                {isDisabled && <Shield size={10} color="rgba(212, 175, 55, 0.3)" style={{ marginTop: 2 }} />}
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+        {!hasProAccess(profile) && (
+          <Text style={styles.settingsHint}>Upgrade to Plus or Pro to unlock medium and long responses.</Text>
+        )}
+      </View>
 
       <Text style={styles.sectionTitle}>Subscription Plans</Text>
       
@@ -243,6 +299,67 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 2,
     textAlign: 'center',
+    marginTop: 10,
+  },
+  settingsCard: {
+    backgroundColor: '#0f2a52',
+    borderRadius: 24,
+    padding: 24,
+    marginBottom: 30,
+    borderWidth: 1,
+    borderColor: 'rgba(212, 175, 55, 0.2)',
+  },
+  settingsLabel: {
+    fontSize: 14,
+    color: '#ffffff',
+    fontFamily: 'Playfair Display',
+    marginBottom: 15,
+    textAlign: 'center',
+  },
+  optionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  optionButton: {
+    flex: 1,
+    backgroundColor: 'rgba(212, 175, 55, 0.05)',
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(212, 175, 55, 0.2)',
+    flexDirection: 'row',
+    gap: 4,
+  },
+  optionButtonActive: {
+    backgroundColor: 'rgba(212, 175, 55, 0.2)',
+    borderColor: '#d4af37',
+  },
+  optionButtonDisabled: {
+    opacity: 0.5,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  optionText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: 'rgba(212, 175, 55, 0.6)',
+    letterSpacing: 1,
+  },
+  optionTextActive: {
+    color: '#d4af37',
+  },
+  optionTextDisabled: {
+    color: 'rgba(212, 175, 55, 0.3)',
+  },
+  settingsHint: {
+    fontSize: 11,
+    color: 'rgba(212, 175, 55, 0.5)',
+    textAlign: 'center',
+    marginTop: 15,
+    fontStyle: 'italic',
+    fontFamily: 'Playfair Display',
   },
   planCard: {
     backgroundColor: '#0f2a52',

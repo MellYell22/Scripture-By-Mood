@@ -2,6 +2,8 @@ export type SubscriptionTier = 'free' | 'plus' | 'pro' | 'owner';
 
 export type BibleTranslation = 'KJV' | 'NIV' | 'ESV' | 'NKJV' | 'NASB' | 'NLT' | 'CSB' | 'AMP' | 'MSG';
 
+export type ResponseLength = 'short' | 'medium' | 'long';
+
 export interface Profile {
   id: string;
   email: string;
@@ -9,6 +11,7 @@ export interface Profile {
   created_at: string;
   has_completed_onboarding: boolean;
   preferred_translation: BibleTranslation;
+  preferred_response_length: ResponseLength;
 }
 
 export interface Scripture {
