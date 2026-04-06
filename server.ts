@@ -44,44 +44,65 @@ app.post("/api/webhooks/stripe", express.raw({ type: "application/json" }), asyn
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
   const stripe = getStripe();
-  if (!stripe || !webhookSecret || !sig) {
-    console.error("Stripe webhook configuration missing");
-    return res.status(400).send("Webhook Error: Configuration missing");
+  console.log(`[StripeWebhook] >>> START: Received webhook event.`);
+
+  if (!stripe) {
+    console.error("[StripeWebhook] ERROR: Stripe is not configured.");
+    return res.status(500).json({ error: "Stripe is not configured on the server." });
+  }
+
+  if (!sig || !webhookSecret) {
+    console.error("[StripeWebhook] ERROR: Stripe webhook configuration missing (signature or secret).");
+    return res.status(400).json({ error: "Webhook Error: Configuration missing" });
   }
 
   let event;
   try {
     event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
+    console.log(`[StripeWebhook] Event Type: ${event.type}`);
   } catch (err: any) {
-    console.error(`Webhook Error: ${err.message}`);
-    return res.status(400).send(`Webhook Error: ${err.message}`);
+    console.error(`[StripeWebhook] ERROR: Verification failed: ${err.message}`);
+    return res.status(400).json({ error: `Webhook Error: ${err.message}` });
   }
 
   try {
     switch (event.type) {
       case "checkout.session.completed": {
         const session = event.data.object as Stripe.Checkout.Session;
-        const userId = session.client_reference_id;
-        const priceId = session.line_items?.data?.[0]?.price?.id || (session as any).metadata?.priceId;
+        const userId = session.client_reference_id || session.metadata?.userId;
+        const priceId = session.line_items?.data?.[0]?.price?.id || session.metadata?.priceId;
 
-        console.log(`[StripeWebhook] Checkout completed for user: ${userId}, priceId: ${priceId}`);
+        console.log(`[StripeWebhook] Checkout completed. User: ${userId}, Price: ${priceId}`);
 
         if (userId && supabase) {
           let tier = "free";
-          const plusPriceId = process.env.VITE_STRIPE_PRICE_ID_PLUS || process.env.STRIPE_PRICE_ID_PLUS;
-          const proPriceId = process.env.VITE_STRIPE_PRICE_ID_PRO || process.env.STRIPE_PRICE_ID_PRO;
+          const plusPriceId = process.env.STRIPE_PRICE_ID_PLUS || process.env.VITE_STRIPE_PRICE_ID_PLUS;
+          const proPriceId = process.env.STRIPE_PRICE_ID_PRO || process.env.VITE_STRIPE_PRICE_ID_PRO;
 
           if (priceId === plusPriceId) tier = "plus";
-          if (priceId === proPriceId) tier = "pro";
+          else if (priceId === proPriceId) tier = "pro";
+          else {
+            console.warn(`[StripeWebhook] Unknown priceId: ${priceId}. Defaulting to free or check mapping.`);
+          }
 
           console.log(`[StripeWebhook] Updating user ${userId} to tier: ${tier}`);
 
           const { error } = await supabase
             .from("profiles")
-            .update({ subscription_tier: tier })
+            .update({ 
+              subscription_tier: tier,
+              stripe_customer_id: session.customer as string,
+              updated_at: new Date().toISOString()
+            })
             .eq("id", userId);
           
-          if (error) console.error(`[StripeWebhook] Supabase error: ${error.message}`);
+          if (error) {
+            console.error(`[StripeWebhook] Supabase Update Error: ${error.message}`);
+            throw error;
+          }
+          console.log(`[StripeWebhook] Successfully updated user ${userId} to ${tier}`);
+        } else {
+          console.error(`[StripeWebhook] ERROR: Missing userId (${userId}) or Supabase client (${!!supabase})`);
         }
         break;
       }
@@ -89,19 +110,31 @@ app.post("/api/webhooks/stripe", express.raw({ type: "application/json" }), asyn
         const subscription = event.data.object as Stripe.Subscription;
         const customerId = subscription.customer as string;
 
+        console.log(`[StripeWebhook] Subscription deleted for customer: ${customerId}`);
+
         if (supabase) {
           // Find user by customer ID and downgrade
-          const { data: profile } = await supabase
+          const { data: profile, error: fetchError } = await supabase
             .from("profiles")
             .select("id")
             .eq("stripe_customer_id", customerId)
             .single();
 
-          if (profile) {
-            await supabase
+          if (fetchError) {
+            console.error(`[StripeWebhook] Supabase Fetch Error: ${fetchError.message}`);
+          } else if (profile) {
+            console.log(`[StripeWebhook] Resetting user ${profile.id} to free tier.`);
+            const { error: updateError } = await supabase
               .from("profiles")
-              .update({ subscription_tier: "free" })
+              .update({ 
+                subscription_tier: "free",
+                updated_at: new Date().toISOString()
+              })
               .eq("id", profile.id);
+            
+            if (updateError) console.error(`[StripeWebhook] Supabase Update Error: ${updateError.message}`);
+          } else {
+            console.warn(`[StripeWebhook] No profile found for customerId: ${customerId}`);
           }
         }
         break;
@@ -109,8 +142,9 @@ app.post("/api/webhooks/stripe", express.raw({ type: "application/json" }), asyn
     }
     res.json({ received: true });
   } catch (err: any) {
-    console.error(`Database Error: ${err.message}`);
-    res.status(500).send("Internal Server Error");
+    console.error(`[StripeWebhook] Unexpected Error: ${err.message}`);
+    console.error(`[StripeWebhook] Stack Trace: ${err.stack}`);
+    return res.status(500).json({ error: "Internal Server Error", message: err.message });
   }
 });
 
@@ -131,79 +165,6 @@ app.get("/api/health", (req, res) => {
     env: process.env.NODE_ENV,
     appUrl: process.env.APP_URL || "not set"
   });
-});
-
-// Stripe Checkout Session Creation
-app.post("/api/create-checkout-session", async (req, res, next) => {
-  try {
-    const { priceId, userId } = req.body;
-    const stripe = getStripe();
-    
-    console.log(`[StripeAPI] Received request for checkout session. User: ${userId}, Price: ${priceId}`);
-
-    if (!stripe) {
-      console.error("[StripeAPI] Stripe is not configured on the server");
-      return res.status(500).json({ error: "Stripe is not configured on the server. Check STRIPE_SECRET_KEY." });
-    }
-
-    if (!userId) {
-      console.error("[StripeAPI] Missing userId in request");
-      return res.status(400).json({ error: "Missing userId" });
-    }
-
-    if (!priceId) {
-      console.error("[StripeAPI] Missing priceId in request");
-      return res.status(400).json({ error: "Missing priceId" });
-    }
-
-    // Map plan names to price IDs if necessary
-    let targetPriceId = priceId;
-    if (priceId === 'plus') {
-      targetPriceId = process.env.STRIPE_PRICE_ID_PLUS || process.env.VITE_STRIPE_PRICE_ID_PLUS;
-    } else if (priceId === 'pro') {
-      targetPriceId = process.env.STRIPE_PRICE_ID_PRO || process.env.VITE_STRIPE_PRICE_ID_PRO;
-    }
-    
-    // Fallback to a generic STRIPE_PRICE_ID if still not found
-    if (!targetPriceId) {
-      targetPriceId = process.env.STRIPE_PRICE_ID;
-    }
-
-    if (!targetPriceId) {
-      console.error(`[StripeAPI] Price ID not found for plan: ${priceId}`);
-      return res.status(400).json({ error: `Price ID not found for plan: ${priceId}` });
-    }
-
-    // Try to get the base URL from the request if APP_URL is not set
-    const protocol = req.headers["x-forwarded-proto"] || "http";
-    const host = req.headers.host;
-    const defaultUrl = `${protocol}://${host}`;
-    
-    const appUrl = process.env.APP_URL || defaultUrl;
-    // Ensure no trailing slash for consistency
-    const baseUrl = appUrl.endsWith('/') ? appUrl.slice(0, -1) : appUrl;
-
-    console.log(`[StripeAPI] Creating session with baseUrl: ${baseUrl}, priceId: ${targetPriceId}`);
-
-    const session = await stripe.checkout.sessions.create({
-      payment_method_types: ["card"],
-      line_items: [{ price: targetPriceId, quantity: 1 }],
-      mode: "subscription",
-      success_url: `${baseUrl}/profile?success=true`,
-      cancel_url: `${baseUrl}/profile?canceled=true`,
-      client_reference_id: userId,
-      metadata: {
-        userId,
-        priceId: targetPriceId
-      }
-    });
-    
-    console.log(`[StripeAPI] Session created: ${session.id}`);
-    res.json({ url: session.url });
-  } catch (err: any) {
-    console.error(`[StripeAPI] Stripe Error: ${err.message}`);
-    next(err); // Pass to global error handler
-  }
 });
 
 // 404 for API routes - MUST be after all API routes

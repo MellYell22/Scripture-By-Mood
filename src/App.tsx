@@ -37,8 +37,13 @@ function AppContent() {
   useEffect(() => {
     // Handle initial route based on URL path
     const path = window.location.pathname;
-    if (path === '/profile') {
+    if (path === '/profile' || path === '/success' || path === '/cancel') {
       setCurrentRoute('Profile');
+      if (path === '/success') {
+        setRouteParams({ success: true });
+      } else if (path === '/cancel') {
+        setRouteParams({ canceled: true });
+      }
     } else if (path === '/mood') {
       setCurrentRoute('Mood');
     } else if (path === '/chat') {
@@ -142,7 +147,7 @@ function AppContent() {
       case 'Chat': return <ChatScreen navigation={nav} />;
       case 'Voice': return <VoiceScreen navigation={nav} />;
       case 'Music': return <MusicScreen />;
-      case 'Profile': return <ProfileScreen />;
+      case 'Profile': return <ProfileScreen route={{ params: routeParams }} />;
       default: return <HomeScreen navigation={nav} />;
     }
   };

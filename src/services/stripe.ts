@@ -1,46 +1,50 @@
-export const createCheckoutSession = async (priceId: string, userId: string) => {
-  const endpoint = '/api/create-checkout-session';
-  console.log(`[StripeDebug] Initiating upgrade. User: ${userId}, PriceId: ${priceId}`);
-  console.log(`[StripeDebug] POST ${endpoint}`);
+import { supabase } from './supabase';
+
+export const createCheckoutSession = async (priceId: string) => {
+  console.log(`[StripeDebug] Initiating upgrade. PriceId: ${priceId}`);
+  
+  if (!supabase) {
+    throw new Error('Supabase is not configured');
+  }
 
   try {
-    const response = await fetch(endpoint, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ priceId, userId }),
-    });
+    const { data: { session } } = await supabase.auth.getSession();
+    const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
+    const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
+
+    if (!supabaseUrl || !supabaseAnonKey) {
+      throw new Error('Supabase configuration missing');
+    }
+
+    console.log(`[StripeDebug] Calling Supabase Edge Function via fetch: create-checkout-session`);
     
-    console.log(`[StripeDebug] Response status: ${response.status} ${response.statusText}`);
-    const contentType = response.headers.get('content-type');
-    console.log(`[StripeDebug] Content-Type: ${contentType}`);
+    const response = await fetch(`${supabaseUrl}/functions/v1/create-checkout-session`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${session?.access_token || supabaseAnonKey}`,
+        'apikey': supabaseAnonKey,
+      },
+      body: JSON.stringify({ priceId }),
+    });
 
     if (!response.ok) {
-      let errorMessage = 'Failed to create checkout session';
-      if (contentType && contentType.includes('application/json')) {
-        const errorData = await response.json();
-        errorMessage = errorData.error || errorMessage;
-      } else {
-        const errorText = await response.text();
-        console.error(`[StripeDebug] Non-JSON error response: ${errorText.substring(0, 100)}...`);
-        errorMessage = `Server error (${response.status}). Please try again later.`;
-      }
-      throw new Error(errorMessage);
+      const errorData = await response.json().catch(() => ({}));
+      console.error(`[StripeDebug] Edge Function error response:`, errorData);
+      throw new Error(errorData.error || errorData.message || 'Unable to start checkout. Please try again.');
     }
 
-    if (contentType && contentType.includes('application/json')) {
-      const data = await response.json();
-      if (data.url) {
-        window.location.href = data.url;
-      } else {
-        throw new Error(data.error || 'No checkout URL returned from server');
-      }
+    const data = await response.json();
+
+    if (data?.url) {
+      console.log(`[StripeDebug] Success. Redirecting to: ${data.url}`);
+      window.location.href = data.url;
+      return;
     } else {
-      const text = await response.text();
-      console.error(`[StripeDebug] Unexpected non-JSON response: ${text.substring(0, 100)}...`);
-      throw new Error('Unexpected server response format');
+      throw new Error('Unable to start checkout. Please try again.');
     }
   } catch (error: any) {
-    console.error(`[StripeDebug] Fetch error: ${error.message}`);
-    throw error;
+    console.error(`[StripeDebug] Checkout session error: ${error.message}`);
+    throw new Error('Unable to start checkout. Please try again.');
   }
 };
