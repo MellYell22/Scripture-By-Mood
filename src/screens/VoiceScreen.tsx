@@ -101,7 +101,7 @@ export default function VoiceScreen({ navigation }: any) {
       } catch (err) {
         console.error('[Voice] Failed to send audioStreamEnd:', err);
       }
-    }, 1200s);
+    }, 1200);
   };
 
   const getPlaybackContext = async () => {

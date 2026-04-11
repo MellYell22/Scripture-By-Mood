@@ -104,3 +104,18 @@ export const getChatResponse = async (history: { role: 'user' | 'model', parts: 
   const text = extractText(result);
   return text || FALLBACK_MESSAGE;
 };
+
+export const generateVideo = async (prompt: string): Promise<string | null> => {
+  // Video generation not implemented yet
+  return null;
+};
+
+export const generateSpeech = async (text: string): Promise<string> => {
+  // Speech generation not implemented yet
+  throw new Error('Speech generation not implemented');
+};
+
+export const getChatResponseStream = async (history: { role: 'user' | 'model', parts: { text: string }[] }[]) => {
+  // Streaming chat not implemented yet, fallback to regular
+  return getChatResponse(history);
+};
