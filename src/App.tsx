@@ -34,6 +34,9 @@ function AppContent() {
   const [dailyVerse, setDailyVerse] = useState<Scripture | null>(null);
   const { currentSong, stopSong, nextSong, prevSong, setPlaybackError } = useMusic();
 
+  // Render Analytics once at the top level
+  const analyticsElement = <Analytics />;
+
   useEffect(() => {
     // Handle initial route based on URL path
     const path = window.location.pathname;
@@ -86,24 +89,21 @@ function AppContent() {
 
   if (!isSupabaseConfigured) {
     return (
-      <>
-        <Analytics />
-        <View style={styles.configErrorContainer}>
-          <AlertTriangle color="#F59E0B" size={48} />
-          <Text style={styles.configErrorTitle}>Configuration Required</Text>
-          <Text style={styles.configErrorText}>
-            Please set the following environment variables in the Secrets panel. 
-            IMPORTANT: The URL must start with https://
-          </Text>
-          <View style={styles.configList}>
-            <Text style={styles.configItem}>• VITE_SUPABASE_URL</Text>
-            <Text style={styles.configItem}>• VITE_SUPABASE_ANON_KEY</Text>
-          </View>
-          <Text style={styles.configErrorHelp}>
-            After adding these secrets, the app will refresh automatically.
-          </Text>
+      <View style={styles.configErrorContainer}>
+        <AlertTriangle color="#F59E0B" size={48} />
+        <Text style={styles.configErrorTitle}>Configuration Required</Text>
+        <Text style={styles.configErrorText}>
+          Please set the following environment variables in the Secrets panel. 
+          IMPORTANT: The URL must start with https://
+        </Text>
+        <View style={styles.configList}>
+          <Text style={styles.configItem}>• VITE_SUPABASE_URL</Text>
+          <Text style={styles.configItem}>• VITE_SUPABASE_ANON_KEY</Text>
         </View>
-      </>
+        <Text style={styles.configErrorHelp}>
+          After adding these secrets, the app will refresh automatically.
+        </Text>
+      </View>
     );
   }
 
@@ -118,19 +118,13 @@ function AppContent() {
 
   if (!session) {
     return (
-      <>
-        <Analytics />
-        <AuthScreen />
-      </>
+      <AuthScreen />
     );
   }
 
   if (profile && !profile.has_completed_onboarding) {
     return (
-      <>
-        <Analytics />
-        <OnboardingScreen onComplete={refreshProfile} />
-      </>
+      <OnboardingScreen onComplete={refreshProfile} />
     );
   }
 
@@ -173,7 +167,7 @@ function AppContent() {
 
   return (
     <View style={styles.container}>
-      <Analytics />
+      {analyticsElement}
       <Navbar onProfile={() => navigate('Profile')} />
       <FullScreenBackground>
         <View style={styles.screenContainer}>

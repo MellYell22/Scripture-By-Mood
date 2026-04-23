@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Alert, TextInput } from 'react-native';
 import { supabase } from '../services/supabase';
 import { Profile } from '../types';
@@ -13,24 +13,37 @@ export default function ProfileScreen({ route }: { route?: { params?: any } }) {
   const { profile, refreshProfile, signOut } = useUser();
   const [loading, setLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<{ text: string, type: 'success' | 'error' | 'info' } | null>(null);
+  const processedUrlRef = useRef<string | null>(null);
 
   useEffect(() => {
     // Check for URL parameters (success/canceled)
-    const params = new URLSearchParams(window.location.search);
-    const success = params.get('success') || route?.params?.success;
-    const canceled = params.get('canceled') || route?.params?.canceled;
-
-    if (success) {
-      setStatusMessage({ text: 'Subscription updated successfully! Welcome to the family.', type: 'success' });
-      // Refresh the global profile to reflect the new tier
-      refreshProfile();
-      // Clear params from URL
-      window.history.replaceState({}, '', window.location.pathname);
-    } else if (canceled) {
-      setStatusMessage({ text: 'Checkout canceled. No changes were made.', type: 'info' });
-      window.history.replaceState({}, '', window.location.pathname);
+    // Use URL to determine if we've already processed this state
+    const currentUrl = window.location.pathname + window.location.search;
+    
+    // Only process if this is a new URL we haven't seen before
+    if (processedUrlRef.current === currentUrl) {
+      return;
     }
-  }, [route?.params]);
+
+    const params = new URLSearchParams(window.location.search);
+    const success = params.get('success');
+    const canceled = params.get('canceled');
+
+    if (success || canceled) {
+      processedUrlRef.current = currentUrl;
+
+      if (success) {
+        setStatusMessage({ text: 'Subscription updated successfully! Welcome to the family.', type: 'success' });
+        // Refresh the global profile to reflect the new tier
+        refreshProfile();
+        // Clear params from URL
+        window.history.replaceState({}, '', window.location.pathname);
+      } else if (canceled) {
+        setStatusMessage({ text: 'Checkout canceled. No changes were made.', type: 'info' });
+        window.history.replaceState({}, '', window.location.pathname);
+      }
+    }
+  }, [refreshProfile]);
 
   const handleLogout = async () => {
     await signOut();
