@@ -67,7 +67,7 @@ function AppContent() {
 
     const today = new Date().toISOString().split('T')[0];
     const lastShown = localStorage.getItem('last_verse_shown_date');
-    
+
     if (lastShown === today) return;
 
     const now = new Date();
@@ -93,7 +93,7 @@ function AppContent() {
         <AlertTriangle color="#F59E0B" size={48} />
         <Text style={styles.configErrorTitle}>Configuration Required</Text>
         <Text style={styles.configErrorText}>
-          Please set the following environment variables in the Secrets panel. 
+          Please set the following environment variables in the Secrets panel.
           IMPORTANT: The URL must start with https://
         </Text>
         <View style={styles.configList}>
@@ -147,17 +147,17 @@ function AppContent() {
   };
 
   const TabButton = ({ name, icon: Icon }: { name: string, icon: any }) => (
-    <TouchableOpacity 
-      style={styles.tabButton} 
+    <TouchableOpacity
+      style={styles.tabButton}
       onPress={() => navigate(name)}
     >
       {currentRoute === name && <View style={styles.activeIndicator} />}
-      <Icon 
-        color={currentRoute === name ? '#d4af37' : 'rgba(255, 255, 255, 0.3)'} 
-        size={22} 
+      <Icon
+        color={currentRoute === name ? '#d4af37' : 'rgba(255, 255, 255, 0.3)'}
+        size={22}
       />
       <Text style={[
-        styles.tabText, 
+        styles.tabText,
         { color: currentRoute === name ? '#d4af37' : 'rgba(255, 255, 255, 0.3)' }
       ]}>
         {name}
@@ -175,10 +175,10 @@ function AppContent() {
         </View>
       </FullScreenBackground>
 
-      <VerseOfTheDayModal 
-        visible={showVerseModal} 
-        onClose={() => setShowVerseModal(false)} 
-        verse={dailyVerse} 
+      <VerseOfTheDayModal
+        visible={showVerseModal}
+        onClose={() => setShowVerseModal(false)}
+        verse={dailyVerse}
       />
 
       {currentSong && (
@@ -186,8 +186,8 @@ function AppContent() {
           <TouchableOpacity style={styles.closePlayerButton} onPress={stopSong}>
             <X size={20} color="#ff4444" />
           </TouchableOpacity>
-          <MusicPlayer 
-            song={currentSong} 
+          <MusicPlayer
+            song={currentSong}
             onNext={nextSong}
             onPrev={prevSong}
             onReady={() => setPlaybackError(null)}
