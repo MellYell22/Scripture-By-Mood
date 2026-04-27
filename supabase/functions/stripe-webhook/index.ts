@@ -18,7 +18,7 @@ serve(async (req) => {
   if (!signature || !webhookSecret) {
     return new Response(JSON.stringify({ error: "Missing signature or webhook secret" }), {
       status: 400,
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...corsHeaders },
     });
   }
 
@@ -36,7 +36,7 @@ serve(async (req) => {
     console.error(`Webhook signature verification failed: ${err.message}`);
     return new Response(JSON.stringify({ error: `Webhook Error: ${err.message}` }), {
       status: 400,
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...corsHeaders },
     });
   }
 
@@ -55,7 +55,6 @@ serve(async (req) => {
 
         console.log(`[Webhook] Checkout completed. User: ${userId}, Price (from metadata): ${priceId}`);
 
-        // If priceId not in metadata, try to get it from line items
         if (!priceId) {
           try {
             const lineItems = await stripe.checkout.sessions.listLineItems(session.id);
@@ -244,13 +243,13 @@ serve(async (req) => {
 
     return new Response(JSON.stringify({ received: true }), {
       status: 200,
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...corsHeaders },
     });
   } catch (err) {
     console.error(`[Webhook] Error processing event: ${err.message}`);
     return new Response(JSON.stringify({ error: "Internal Server Error" }), {
       status: 500,
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...corsHeaders },
     });
   }
 });
