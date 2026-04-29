@@ -80,48 +80,58 @@ serve(async (req) => {
 
         console.log(`[Stripe Webhook] Session completed for user: ${userId}, Customer: ${customerId}, Subscription: ${subscriptionId}`);
 
-        if (userId) {
-          const lineItems = await stripe.checkout.sessions.listLineItems(session.id);
-          const priceId = lineItems.data[0]?.price?.id;
-          
-          let tier = "free";
-          const proPriceId = Deno.env.get("STRIPE_PRICE_ID_PRO");
+        if (!userId) {
+          console.error("[Stripe Webhook] CRITICAL: No userId found in session metadata or client_reference_id. Cannot update profile.");
+          return new Response(JSON.stringify({ error: "Missing userId in session" }), { 
+            status: 400, 
+            headers: { ...corsHeaders, "Content-Type": "application/json" } 
+          });
+        }
 
-          console.log(`[Stripe Webhook] Price ID from session: ${priceId}, Expected Pro ID: ${proPriceId}`);
+        const lineItems = await stripe.checkout.sessions.listLineItems(session.id);
+        const priceId = lineItems.data[0]?.price?.id;
+        
+        let tier = "free";
+        const proPriceId = Deno.env.get("STRIPE_PRICE_ID_PRO");
 
-          if (priceId === proPriceId) tier = "pro";
+        console.log(`[Stripe Webhook] Price ID from session: ${priceId}, Expected Pro ID: ${proPriceId}`);
 
-          console.log(`[Stripe Webhook] Updating user ${userId} to tier: ${tier}`);
+        if (priceId === proPriceId) tier = "pro";
 
-          // Get subscription details if available
-          let subscriptionDetails = {};
-          if (subscriptionId) {
-            const sub = await stripe.subscriptions.retrieve(subscriptionId);
-            subscriptionDetails = {
-              stripe_subscription_id: subscriptionId,
-              stripe_subscription_status: sub.status,
-              stripe_price_id: priceId,
-              stripe_current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
-            };
-          }
+        console.log(`[Stripe Webhook] Updating user ${userId} to tier: ${tier}`);
 
-          const { error } = await supabase
-            .from("profiles")
-            .update({
-              subscription_tier: tier,
-              stripe_customer_id: customerId,
-              ...subscriptionDetails,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", userId);
+        // Get subscription details if available
+        let subscriptionDetails = {};
+        if (subscriptionId) {
+          const sub = await stripe.subscriptions.retrieve(subscriptionId);
+          subscriptionDetails = {
+            stripe_subscription_id: subscriptionId,
+            stripe_subscription_status: sub.status,
+            stripe_price_id: priceId,
+            stripe_current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
+          };
+        }
 
-          if (error) {
-            console.error(`[Stripe Webhook] Error updating profile for ${userId}:`, error);
-            throw error;
-          }
-          console.log(`[Stripe Webhook] Successfully updated profile for ${userId}`);
+        const { data, error, count } = await supabase
+          .from("profiles")
+          .update({
+            subscription_tier: tier,
+            stripe_customer_id: customerId,
+            ...subscriptionDetails,
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", userId)
+          .select();
+
+        if (error) {
+          console.error(`[Stripe Webhook] Error updating profile for ${userId}:`, error);
+          throw error;
+        }
+        
+        if (!data || data.length === 0) {
+          console.warn(`[Stripe Webhook] WARNING: Profile update for ${userId} affected 0 rows. User might not exist in Supabase yet.`);
         } else {
-          console.error("[Stripe Webhook] No userId found in session metadata or client_reference_id");
+          console.log(`[Stripe Webhook] Successfully updated profile for ${userId}. New tier in DB: ${data[0].subscription_tier}`);
         }
         break;
       }
@@ -145,7 +155,7 @@ serve(async (req) => {
 
           console.log(`[Stripe Webhook] Updating customer ${customerId} to tier: ${tier}`);
 
-          const { error } = await supabase
+          const { data, error } = await supabase
             .from("profiles")
             .update({
               subscription_tier: tier,
@@ -156,13 +166,19 @@ serve(async (req) => {
               stripe_current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
               updated_at: new Date().toISOString(),
             })
-            .eq("stripe_customer_id", customerId);
+            .eq("stripe_customer_id", customerId)
+            .select();
 
           if (error) {
             console.error(`[Stripe Webhook] Error updating profile for customer ${customerId}:`, error);
             throw error;
           }
-          console.log(`[Stripe Webhook] Profile update result: SUCCESS for customer ${customerId}`);
+          
+          if (!data || data.length === 0) {
+            console.warn(`[Stripe Webhook] WARNING: Profile update for customer ${customerId} affected 0 rows. customerId not found.`);
+          } else {
+            console.log(`[Stripe Webhook] Profile update result: SUCCESS for customer ${customerId}. New tier: ${data[0].subscription_tier}`);
+          }
         }
         break;
       }
@@ -180,7 +196,7 @@ serve(async (req) => {
 
         console.log(`[Stripe Webhook] Subscription changed for customer ${customerId}. New tier: ${tier}, Status: ${subscription.status}`);
 
-        const { error } = await supabase
+        const { data, error } = await supabase
           .from("profiles")
           .update({
             subscription_tier: tier,
@@ -190,13 +206,19 @@ serve(async (req) => {
             stripe_current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
             updated_at: new Date().toISOString(),
           })
-          .eq("stripe_customer_id", customerId);
+          .eq("stripe_customer_id", customerId)
+          .select();
 
         if (error) {
           console.error(`[Stripe Webhook] Error updating subscription for customer ${customerId}:`, error);
           throw error;
         }
-        console.log(`[Stripe Webhook] Profile update result: SUCCESS for customer ${customerId} (Subscription ${event.type})`);
+
+        if (!data || data.length === 0) {
+          console.warn(`[Stripe Webhook] WARNING: Subscription update for customer ${customerId} affected 0 rows.`);
+        } else {
+          console.log(`[Stripe Webhook] Profile update result: SUCCESS for customer ${customerId} (Subscription ${event.type}). New tier: ${data[0].subscription_tier}`);
+        }
         break;
       }
 

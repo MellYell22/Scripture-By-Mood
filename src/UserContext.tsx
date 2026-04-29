@@ -6,7 +6,7 @@ interface UserContextType {
   session: any;
   profile: Profile | null;
   loading: boolean;
-  refreshProfile: () => Promise<void>;
+  refreshProfile: (showLoading?: boolean) => Promise<void>;
   signOut: () => Promise<void>;
 }
 
