@@ -14,6 +14,11 @@ export interface Profile {
   preferred_response_length: ResponseLength;
   verse_of_the_day_enabled: boolean;
   verse_of_the_day_time: string; // ISO time string or HH:mm
+  stripe_customer_id?: string;
+  stripe_subscription_id?: string;
+  stripe_subscription_status?: string;
+  stripe_price_id?: string;
+  stripe_current_period_end?: string;
 }
 
 export interface Scripture {

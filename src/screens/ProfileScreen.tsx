@@ -19,28 +19,79 @@ export default function ProfileScreen({ route, navigation }: { route?: { params?
   const [savedScriptures, setSavedScriptures] = useState<SavedScripture[]>([]);
   const [loadingSaved, setLoadingSaved] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [isActivating, setIsActivating] = useState(false);
   const hasHandledRedirect = useRef(false);
+  const pollingInterval = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    return () => {
+      if (pollingInterval.current) {
+        clearInterval(pollingInterval.current);
+        pollingInterval.current = null;
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isActivating && profile?.subscription_tier === 'pro') {
+      console.log('[StripeDebug] Pro tier detected! Stopping polling.');
+      setIsActivating(false);
+      setStatusMessage({ text: 'Activation complete! Welcome to the Pro family.', type: 'success' });
+      if (pollingInterval.current) {
+        clearInterval(pollingInterval.current);
+        pollingInterval.current = null;
+      }
+    }
+  }, [isActivating, profile?.subscription_tier]);
 
   useEffect(() => {
     // Return early if we've already handled this redirect in this component instance
     if (hasHandledRedirect.current) return;
 
     // Check for URL parameters (success/canceled)
-    const params = new URLSearchParams(window.location.search);
-    const success = params.get('success') || route?.params?.success;
-    const canceled = params.get('canceled') || route?.params?.canceled;
+    const urlParams = new URLSearchParams(window.location.search);
+    const success = urlParams.get('success') === 'true' || route?.params?.success;
+    const canceled = urlParams.get('canceled') === 'true' || route?.params?.canceled;
 
     if (success || canceled) {
-      console.log(`[ProfileScreen] Handling Stripe redirect. Success: ${!!success}, Canceled: ${!!canceled}`);
+      console.log(`[StripeDebug] Handling Stripe redirect. Success: ${!!success}, Canceled: ${!!canceled}`);
       
       // Mark as handled to prevent re-triggering within this lifecycle
       hasHandledRedirect.current = true;
 
       // Update state based on parameters
       if (success) {
-        setStatusMessage({ text: 'Subscription updated successfully! Welcome to the family.', type: 'success' });
-        // Refresh the global profile to reflect the new tier
-        refreshProfile();
+        if (profile?.subscription_tier !== 'pro') {
+          setIsActivating(true);
+          setStatusMessage({ text: 'Payment received! Activating your Pro plan...', type: 'info' });
+          
+          // Start polling for subscription update
+          let attempts = 0;
+          const maxAttempts = 10; // 10 attempts * 3 seconds = 30 seconds
+          
+          pollingInterval.current = setInterval(async () => {
+            attempts++;
+            console.log(`[StripeDebug] Polling subscription status (Attempt ${attempts}/${maxAttempts})...`);
+            
+            // Call fetch directly to avoid setting global loading state if desired
+            // Use background refresh to avoid full-screen loader
+            await refreshProfile(false);
+            
+            if (attempts >= maxAttempts) {
+              if (pollingInterval.current) {
+                clearInterval(pollingInterval.current);
+                pollingInterval.current = null;
+              }
+              setIsActivating(false);
+              setStatusMessage({ 
+                text: 'Activation is taking a bit longer than expected. It will update automatically in a few moments.', 
+                type: 'info' 
+              });
+            }
+          }, 3000);
+        } else {
+          setStatusMessage({ text: 'Subscription updated successfully! Welcome to the Pro family.', type: 'success' });
+        }
       } else if (canceled) {
         setStatusMessage({ text: 'Checkout canceled. No changes were made.', type: 'info' });
       }
@@ -50,7 +101,7 @@ export default function ProfileScreen({ route, navigation }: { route?: { params?
         navigation.setParams({ success: undefined, canceled: undefined });
       }
 
-      // 2. Clear params from Browser URL bar
+      // 2. Clear params from Browser URL bar without reload
       if (typeof window !== 'undefined' && window.history) {
         const cleanUrl = window.location.pathname;
         window.history.replaceState({}, '', cleanUrl);
@@ -155,6 +206,12 @@ export default function ProfileScreen({ route, navigation }: { route?: { params?
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.header}>
+        {isActivating && (
+          <View style={styles.activatingLoader}>
+            <ActivityIndicator size="small" color="#d4af37" />
+            <Text style={styles.activatingText}>ACTIVATING PRO FEATURES...</Text>
+          </View>
+        )}
         <View style={styles.avatar}>
           <Text style={styles.avatarText}>{profile?.email?.[0].toUpperCase()}</Text>
         </View>
@@ -494,6 +551,24 @@ const styles = StyleSheet.create({
     borderRadius: 24,
     borderWidth: 1,
     borderColor: '#d4af37',
+  },
+  activatingLoader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    backgroundColor: 'rgba(212, 175, 55, 0.1)',
+    paddingHorizontal: 15,
+    paddingVertical: 10,
+    borderRadius: 30,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(212, 175, 55, 0.3)',
+  },
+  activatingText: {
+    color: '#d4af37',
+    fontSize: 10,
+    fontWeight: 'bold',
+    letterSpacing: 1.5,
   },
   avatar: {
     width: 50,

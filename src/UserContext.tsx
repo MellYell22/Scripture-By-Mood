@@ -101,9 +101,9 @@ export function UserProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const refreshProfile = async () => {
+  const refreshProfile = async (showLoading = true) => {
     if (session?.user?.id) {
-      setLoading(true);
+      if (showLoading) setLoading(true);
       await fetchProfile(session.user.id);
     }
   };
