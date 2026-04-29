@@ -4,13 +4,21 @@ import Stripe from "https://esm.sh/stripe@13.10.0?target=deno";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "content-type, stripe-signature",
 };
 
 serve(async (req) => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
+  }
+
+  // Stripe webhooks are always POST
+  if (req.method !== "POST") {
+    return new Response(JSON.stringify({ error: "Method not allowed" }), { 
+      status: 405, 
+      headers: { ...corsHeaders, "Content-Type": "application/json" } 
+    });
   }
 
   const signature = req.headers.get("stripe-signature");
@@ -20,7 +28,10 @@ serve(async (req) => {
   // Validate environment and signature
   if (!signature) {
     console.error("[Stripe Webhook] Error: Missing stripe-signature header");
-    return new Response(JSON.stringify({ error: "Missing signature" }), { status: 400, headers: corsHeaders });
+    return new Response(JSON.stringify({ error: "Missing signature" }), { 
+      status: 400, 
+      headers: { ...corsHeaders, "Content-Type": "application/json" } 
+    });
   }
 
   if (!webhookSecret) {
@@ -115,12 +126,13 @@ serve(async (req) => {
         break;
       }
 
+      case "invoice.paid":
       case "invoice.payment_succeeded": {
         const invoice = event.data.object as Stripe.Invoice;
         const customerId = invoice.customer as string;
         const subscriptionId = invoice.subscription as string;
 
-        console.log(`[Stripe Webhook] Payment succeeded for invoice: ${invoice.id}, Customer: ${customerId}`);
+        console.log(`[Stripe Webhook] ${event.type} for invoice: ${invoice.id}, Customer: ${customerId}`);
 
         if (subscriptionId) {
           const subscription = await stripe.subscriptions.retrieve(subscriptionId);
@@ -150,6 +162,7 @@ serve(async (req) => {
             console.error(`[Stripe Webhook] Error updating profile for customer ${customerId}:`, error);
             throw error;
           }
+          console.log(`[Stripe Webhook] Profile update result: SUCCESS for customer ${customerId}`);
         }
         break;
       }
@@ -183,6 +196,7 @@ serve(async (req) => {
           console.error(`[Stripe Webhook] Error updating subscription for customer ${customerId}:`, error);
           throw error;
         }
+        console.log(`[Stripe Webhook] Profile update result: SUCCESS for customer ${customerId} (Subscription ${event.type})`);
         break;
       }
 
