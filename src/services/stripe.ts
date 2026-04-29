@@ -1,14 +1,23 @@
 import { supabase } from './supabase';
 
-export const createCheckoutSession = async (userId: string, priceId: string) => {
-  console.log(`[StripeDebug] Initiating upgrade. UserId: ${userId}, PriceId: ${priceId}`);
+export const createCheckoutSession = async (priceId: string) => {
+  console.log(`[StripeDebug] Initiating upgrade. PriceId: ${priceId}`);
   
   if (!supabase) {
     throw new Error('Supabase is not configured');
   }
 
   try {
+    // 1. Retrieve the authenticated user using Supabase auth as requested
+    const { data: { user }, error: userError } = await supabase.auth.getUser();
+    
+    if (userError || !user) {
+      throw new Error("You must be logged in to upgrade.");
+    }
+
+    const userId = user.id;
     const { data: { session } } = await supabase.auth.getSession();
+    
     const supabaseUrl = import.meta.env.VITE_SUPABASE_URL;
     const supabaseAnonKey = import.meta.env.VITE_SUPABASE_ANON_KEY;
 
@@ -45,11 +54,6 @@ export const createCheckoutSession = async (userId: string, priceId: string) => 
     }
   } catch (error: any) {
     console.error(`[StripeDebug] Checkout session error: ${error.message}`);
-    // If the error already has a descriptive message from the server, use it.
-    // Otherwise, use a fallback.
-    const message = error.message && error.message !== '[object Object]' 
-      ? error.message 
-      : 'Unable to start checkout. Please try again.';
-    throw new Error(message);
+    throw new Error(error.message || 'Unable to start checkout. Please try again.');
   }
 };

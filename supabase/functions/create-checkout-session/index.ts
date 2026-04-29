@@ -22,35 +22,41 @@ serve(async (req) => {
   }
 
   try {
-    const { priceId, userId: bodyUserId } = await req.json();
+    const body = await req.json();
+    console.log("[create-checkout-session] Received body:", JSON.stringify(body));
+    const { priceId, userId: bodyUserId } = body;
 
     if (!priceId) {
+      console.error("[create-checkout-session] Error: Missing priceId");
       return new Response(
         JSON.stringify({ error: "Missing priceId" }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
 
-    // Get user ID from JWT if not in body
+    // Get user from JWT to verify and get email
     let userId = bodyUserId;
-    if (!userId) {
-      const authHeader = req.headers.get("Authorization");
-      if (authHeader) {
-        const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
-        const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
-        const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-          global: { headers: { Authorization: authHeader } },
-        });
-        const { data: { user }, error: userError } = await supabase.auth.getUser();
-        if (userError || !user) {
-          console.error(`[create-checkout-session] Auth error: ${userError?.message}`);
-        } else {
-          userId = user.id;
-        }
+    let userEmail: string | undefined = undefined;
+    
+    const authHeader = req.headers.get("Authorization");
+    if (authHeader) {
+      const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
+      const supabaseAnonKey = Deno.env.get("SUPABASE_ANON_KEY") ?? "";
+      const supabase = createClient(supabaseUrl, supabaseAnonKey, {
+        global: { headers: { Authorization: authHeader } },
+      });
+      const { data: { user }, error: userError } = await supabase.auth.getUser();
+      if (userError || !user) {
+        console.error(`[create-checkout-session] Auth error or user not found: ${userError?.message}`);
+      } else {
+        userId = user.id;
+        userEmail = user.email;
+        console.log(`[create-checkout-session] Authenticated user: ${userId}, Email: ${userEmail}`);
       }
     }
 
     if (!userId) {
+      console.error("[create-checkout-session] Error: Missing userId after validation");
       return new Response(
         JSON.stringify({ error: "Unauthorized: Missing userId" }),
         { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } }
@@ -78,6 +84,7 @@ serve(async (req) => {
     try {
       const session = await stripe.checkout.sessions.create({
         payment_method_types: ["card"],
+        customer_email: userEmail,
         line_items: [
           {
             price: priceId,
@@ -85,15 +92,15 @@ serve(async (req) => {
           },
         ],
         mode: "subscription",
-        success_url: `${origin}/success`,
-        cancel_url: `${origin}/cancel`,
+        success_url: `${origin}/profile?success=true`,
+        cancel_url: `${origin}/profile?canceled=true`,
         client_reference_id: userId,
         metadata: {
           userId,
         },
       });
 
-      console.log(`[create-checkout-session] Session created successfully: ${session.id}`);
+      console.log(`[create-checkout-session] Session created successfully: ${session.id}, URL: ${session.url}`);
       return new Response(
         JSON.stringify({ url: session.url }),
         { status: 200, headers: { ...corsHeaders, "Content-Type": "application/json" } }
