@@ -73,27 +73,111 @@ app.post("/api/stripe-webhook", async (req: any, res) => {
 
   console.log(`[Server Webhook] Received ${event.type}`);
 
+  // Helper to find profile by Stripe ID or Email
+  const findProfile = async (customerId: string, email: string | null, userIdFromMetadata?: string | null) => {
+    console.log(`[Server Webhook] Looking for profile: customerId=${customerId}, email=${email}, userIdFromMetadata=${userIdFromMetadata}`);
+    
+    if (!supabase) return null;
+
+    // 1. Try metadata ID if provided
+    if (userIdFromMetadata) {
+      console.log(`[Server Webhook] Match attempt by metadata ID: ${userIdFromMetadata}`);
+      const { data } = await supabase.from('profiles').select('id, email, stripe_customer_id').eq('id', userIdFromMetadata).maybeSingle();
+      if (data) {
+        console.log(`[Server Webhook] Match SUCCESS: User found by ID: ${data.id}`);
+        return data;
+      }
+    }
+
+    // 2. Try Stripe Customer ID
+    if (customerId) {
+      console.log(`[Server Webhook] Match attempt by stripe_customer_id: ${customerId}`);
+      const { data } = await supabase.from('profiles').select('id, email, stripe_customer_id').eq('stripe_customer_id', customerId).maybeSingle();
+      if (data) {
+        console.log(`[Server Webhook] Match SUCCESS: User found by customer ID: ${data.id}`);
+        return data;
+      }
+    }
+
+    // 3. Fallback to Email
+    if (email) {
+      console.log(`[Server Webhook] Match attempt by email fallback: ${email}`);
+      const { data } = await supabase.from('profiles').select('id, email, stripe_customer_id').eq('email', email).maybeSingle();
+      if (data) {
+        console.log(`[Server Webhook] Match SUCCESS: User found by email: ${data.id}`);
+        return data;
+      }
+    }
+
+    console.log(`[Server Webhook] Profile lookup COMPLETE: No matching user found.`);
+    return null;
+  };
+
   try {
     switch (event.type) {
       case 'checkout.session.completed': {
         const session = event.data.object as Stripe.Checkout.Session;
-        const userId = session.client_reference_id || session.metadata?.userId || session.metadata?.user_id;
         const customerId = session.customer as string;
-        const email = session.customer_details?.email;
+        const customerEmail = session.customer_details?.email || session.customer_email || null;
+        const userIdMetadata = session.client_reference_id || session.metadata?.userId || session.metadata?.user_id;
         
-        console.log(`[Server Webhook] Checkout completed: user=${userId}, customer=${customerId}, email=${email}`);
+        console.log(`[Server Webhook] Processing ${event.type} | Session: ${session.id}`);
 
-        if (userId && supabase) {
-          const { error } = await supabase.from('profiles').update({
-            stripe_customer_id: customerId,
-            subscription_tier: 'pro',
-            updated_at: new Date().toISOString()
-          }).eq('id', userId);
+        if (supabase) {
+          const profile = await findProfile(customerId, customerEmail, userIdMetadata);
+          
+          if (profile) {
+            console.log(`[Server Webhook] Found user ${profile.id}. Upgrading to pro.`);
+            const { error } = await supabase.from('profiles').update({
+              stripe_customer_id: customerId,
+              subscription_tier: 'pro',
+              subscription_status: 'active',
+              plan: 'pro',
+              stripe_subscription_status: 'active',
+              updated_at: new Date().toISOString()
+            }).eq('id', profile.id);
 
-          if (error) {
-            console.error(`[Server Webhook] Error updating profile for user ${userId}: ${error.message}`);
+            if (error) {
+              console.error(`[Server Webhook] DB Update FAILED for user ${profile.id}: ${error.message}`);
+            } else {
+              console.log(`[Server Webhook] DB Update SUCCESS: User ${profile.id} upgraded to pro.`);
+            }
           } else {
-            console.log(`[Server Webhook] Successfully upgraded user ${userId} to pro`);
+            console.error(`[Server Webhook] CRITICAL: Could not identify user for completed checkout.`);
+          }
+        }
+        break;
+      }
+      case 'invoice.paid': {
+        const invoice = event.data.object as Stripe.Invoice;
+        const customerId = invoice.customer as string;
+        const customerEmail = invoice.customer_email;
+        const subscriptionId = invoice.subscription as string;
+
+        console.log(`[Server Webhook] Processing ${event.type} | Invoice: ${invoice.id} | Customer: ${customerId}`);
+
+        if (supabase) {
+          const profile = await findProfile(customerId, customerEmail);
+
+          if (profile) {
+            console.log(`[Server Webhook] Found user ${profile.id}. Confirming Pro status via invoice.`);
+            const { error } = await supabase.from('profiles').update({
+              stripe_customer_id: customerId,
+              stripe_subscription_id: subscriptionId,
+              subscription_tier: 'pro',
+              subscription_status: 'active',
+              plan: 'pro',
+              stripe_subscription_status: 'active',
+              updated_at: new Date().toISOString()
+            }).eq('id', profile.id);
+            
+            if (error) {
+              console.error(`[Server Webhook] DB Update FAILED for user ${profile.id} on invoice payment: ${error.message}`);
+            } else {
+              console.log(`[Server Webhook] DB Update SUCCESS: User ${profile.id} Pro status confirmed via invoice.`);
+            }
+          } else {
+            console.log(`[Server Webhook] No user found matching customer ${customerId} (email: ${customerEmail}) for invoice ${invoice.id}.`);
           }
         }
         break;
@@ -102,30 +186,34 @@ app.post("/api/stripe-webhook", async (req: any, res) => {
       case 'customer.subscription.updated': {
         const subscription = event.data.object as Stripe.Subscription;
         const customerId = subscription.customer as string;
-        const userId = subscription.metadata?.userId || subscription.metadata?.user_id;
+        const userIdMetadata = subscription.metadata?.userId || subscription.metadata?.user_id;
         const status = subscription.status;
         const tier = (status === 'active' || status === 'trialing') ? 'pro' : 'free';
 
-        console.log(`[Server Webhook] Subscription ${event.type}: customer=${customerId}, status=${status}`);
+        console.log(`[Server Webhook] Processing ${event.type} | Subscription: ${subscription.id} | Status: ${status}`);
 
         if (supabase) {
-          let query = supabase.from('profiles').update({
-            stripe_customer_id: customerId,
-            subscription_tier: tier,
-            updated_at: new Date().toISOString()
-          });
+          const profile = await findProfile(customerId, null, userIdMetadata);
+          
+          if (profile) {
+            console.log(`[Server Webhook] Found user ${profile.id}. Updating subscription to ${status} (tier: ${tier}).`);
+            const { error } = await supabase.from('profiles').update({
+              stripe_customer_id: customerId,
+              stripe_subscription_id: subscription.id,
+              subscription_tier: tier,
+              subscription_status: status === 'active' || status === 'trialing' ? 'active' : 'inactive',
+              plan: tier,
+              stripe_subscription_status: status,
+              updated_at: new Date().toISOString()
+            }).eq('id', profile.id);
 
-          if (userId) {
-            query = query.eq('id', userId);
+            if (error) {
+              console.error(`[Server Webhook] DB Update FAILED for user ${profile.id}: ${error.message}`);
+            } else {
+              console.log(`[Server Webhook] DB Update SUCCESS: User ${profile.id} synced with subscription status.`);
+            }
           } else {
-            query = query.eq('stripe_customer_id', customerId);
-          }
-
-          const { error } = await query;
-          if (error) {
-            console.error(`[Server Webhook] Error updating subscription for customer ${customerId}: ${error.message}`);
-          } else {
-            console.log(`[Server Webhook] Updated user (userId: ${userId || 'unknown'}, customer: ${customerId}) to ${tier}`);
+            console.log(`[Server Webhook] No user found for subscription event.`);
           }
         }
         break;
@@ -133,12 +221,28 @@ app.post("/api/stripe-webhook", async (req: any, res) => {
       case 'customer.subscription.deleted': {
         const subscription = event.data.object as Stripe.Subscription;
         const customerId = subscription.customer as string;
+        
+        console.log(`[Server Webhook] Processing ${event.type} | Subscription: ${subscription.id}`);
+
         if (supabase) {
-          await supabase.from('profiles').update({
-            subscription_tier: 'free',
-            updated_at: new Date().toISOString()
-          }).eq('stripe_customer_id', customerId);
-          console.log(`[Server Webhook] Reset customer ${customerId} to free`);
+          const profile = await findProfile(customerId, null);
+          
+          if (profile) {
+            console.log(`[Server Webhook] Found user ${profile.id}. Resetting to free due to deletion.`);
+            const { error } = await supabase.from('profiles').update({
+              subscription_tier: 'free',
+              subscription_status: 'canceled',
+              plan: 'free',
+              stripe_subscription_status: 'canceled',
+              updated_at: new Date().toISOString()
+            }).eq('id', profile.id);
+
+            if (error) {
+              console.error(`[Server Webhook] DB Update FAILED for user ${profile.id}: ${error.message}`);
+            } else {
+              console.log(`[Server Webhook] DB Update SUCCESS: User ${profile.id} reset to free.`);
+            }
+          }
         }
         break;
       }

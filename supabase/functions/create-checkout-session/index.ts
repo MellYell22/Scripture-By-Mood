@@ -65,8 +65,16 @@ serve(async (req) => {
 
     userId = user.id;
     userEmail = user.email;
-    console.log(`[create-checkout-session] Authenticated user: ${userId}, Email: ${userEmail}`);
-    console.log("Sending userId to Stripe:", userId);
+
+    // Fetch profile to see if they already have a stripe_customer_id
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('stripe_customer_id')
+      .eq('id', userId)
+      .single();
+
+    const existingCustomerId = profile?.stripe_customer_id;
+    console.log(`[create-checkout-session] Authenticated user: ${userId}, Existing Stripe ID: ${existingCustomerId || 'none'}`);
 
     const stripeSecretKey = Deno.env.get("STRIPE_SECRET_KEY");
     if (!stripeSecretKey) {
@@ -90,9 +98,8 @@ serve(async (req) => {
     console.log(`[create-checkout-session] Creating session for user: ${userId}, price: ${priceId}, origin: ${origin}`);
 
     try {
-      const session = await stripe.checkout.sessions.create({
+      const sessionOptions: any = {
         payment_method_types: ["card"],
-        customer_email: userEmail,
         line_items: [
           {
             price: priceId,
@@ -106,14 +113,22 @@ serve(async (req) => {
             user_id: userId,
           },
         },
-        success_url: `https://react-bible-six.vercel.app/payment-success?session_id={CHECKOUT_SESSION_ID}`,
-        cancel_url: `https://react-bible-six.vercel.app/pricing`,
+        success_url: `${origin}/payment-success?session_id={CHECKOUT_SESSION_ID}`,
+        cancel_url: `${origin}/pricing`,
         client_reference_id: userId,
         metadata: {
           userId,
           user_id: userId,
         },
-      });
+      };
+
+      if (existingCustomerId) {
+        sessionOptions.customer = existingCustomerId;
+      } else if (userEmail) {
+        sessionOptions.customer_email = userEmail;
+      }
+
+      const session = await stripe.checkout.sessions.create(sessionOptions);
 
       console.log(`[create-checkout-session] Session created successfully: ${session.id}, URL: ${session.url}`);
       return new Response(
