@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, ActivityIndicator, StyleSheet, Platform } from 'react-native';
 import { Video, Sparkles, Download, RefreshCw, X, Lock } from 'lucide-react';
-import { generateVideo } from '../services/gemini';
+import { generateVideo } from '../services/ai';
 import { motion, AnimatePresence } from 'motion/react';
 
 const MotionView = motion(View);

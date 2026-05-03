@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { View, Text, TouchableOpacity, ScrollView, StyleSheet, ActivityIndicator, TextInput, Image } from 'react-native';
 import { motion } from 'motion/react';
-import { getMoodScriptures, generateSpeech } from '../services/gemini';
+import { getMoodScriptures, generateSpeech } from '../services/ai';
 
 const MotionView = motion(View);
 import { MoodResponse } from '../types';

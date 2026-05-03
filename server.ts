@@ -5,6 +5,7 @@ import { createClient } from "@supabase/supabase-js";
 import dotenv from "dotenv";
 import path from "path";
 import { fileURLToPath } from "url";
+import OpenAI from "openai";
 
 dotenv.config();
 
@@ -13,6 +14,20 @@ const __dirname = path.dirname(__filename);
 
 export const app = express();
 const PORT = 3000;
+
+// OpenAI initialization
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+const DAVID_PERSONALITY_PROMPT = `David is a calm, emotionally intelligent, supportive male companion. He speaks naturally like a real human, not like an assistant. He listens carefully and responds with warmth, empathy, and wisdom. He avoids repeating phrases. He varies his wording. He never sounds scripted or robotic. He provides comfort first, then offers a relevant Bible verse that matches the user's emotional state. His tone is gentle, grounded, and reassuring.
+
+Each response should include:
+1. Emotional support (natural conversation)
+2. A relevant Bible verse
+3. Optional gentle encouragement
+
+Keep responses clean and conversational for future voice support. Avoid excessive formatting.`;
 
 // Lazy Stripe initialization to avoid top-level crashes
 let stripeInstance: Stripe | null = null;
@@ -260,9 +275,125 @@ app.get("/api/health", (req, res) => {
     status: "ok", 
     stripeConfigured: !!getStripe(),
     supabaseConfigured: !!supabase,
+    openaiConfigured: !!process.env.OPENAI_API_KEY,
     env: process.env.NODE_ENV,
     appUrl: process.env.APP_URL || "not set"
   });
+});
+
+// OpenAI API Endpoints
+app.post("/api/chat", async (req, res) => {
+  const { messages, stream = false } = req.body;
+  
+  if (!process.env.OPENAI_API_KEY) {
+    return res.status(500).json({ error: "OpenAI API Key is not configured." });
+  }
+
+  try {
+    if (stream) {
+      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Cache-Control', 'no-cache');
+      res.setHeader('Connection', 'keep-alive');
+
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [{ role: "system", content: DAVID_PERSONALITY_PROMPT }, ...messages],
+        stream: true,
+      });
+
+      for await (const chunk of completion) {
+        const content = chunk.choices[0]?.delta?.content || "";
+        if (content) {
+          res.write(`data: ${JSON.stringify({ text: content })}\n\n`);
+        }
+      }
+      res.write('data: [DONE]\n\n');
+      res.end();
+    } else {
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o",
+        messages: [{ role: "system", content: DAVID_PERSONALITY_PROMPT }, ...messages],
+      });
+      res.json({ text: completion.choices[0].message.content });
+    }
+  } catch (error: any) {
+    console.error("[OpenAI] Chat error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/mood-scriptures", async (req, res) => {
+  const { mood, translation = "NIV" } = req.body;
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        { role: "system", content: DAVID_PERSONALITY_PROMPT },
+        { 
+          role: "user", 
+          content: `The user is feeling: ${mood}. 
+Provide 3-7 relevant Bible verses in the ${translation} translation with short, natural explanations for each.
+Ensure the response is valid JSON with the following structure:
+{
+  "scriptures": [
+    { "verse": "...", "reference": "...", "explanation": "..." }
+  ],
+  "encouragement": "..."
+}`
+        }
+      ],
+      response_format: { type: "json_object" }
+    });
+
+    const content = completion.choices[0].message.content;
+    res.json(JSON.parse(content || "{}"));
+  } catch (error: any) {
+    console.error("[OpenAI] Mood scriptures error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/reflection", async (req, res) => {
+  const { verse, reference } = req.body;
+
+  try {
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4o",
+      messages: [
+        { role: "system", content: DAVID_PERSONALITY_PROMPT },
+        { 
+          role: "user", 
+          content: `Provide a short, compassionate, and spiritually grounded reflection on the following Bible verse: "${verse}" (${reference}). 
+Briefly explain how it applies to a person's life today. The reflection must be exactly 3–4 sentences long.`
+        }
+      ],
+    });
+
+    res.json({ text: completion.choices[0].message.content });
+  } catch (error: any) {
+    console.error("[OpenAI] Reflection error:", error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+app.post("/api/speech", async (req, res) => {
+  const { text } = req.body;
+
+  try {
+    const mp3 = await openai.audio.speech.create({
+      model: "tts-1",
+      voice: "alloy",
+      input: text,
+    });
+
+    const buffer = Buffer.from(await mp3.arrayBuffer());
+    res.setHeader('Content-Type', 'audio/mpeg');
+    res.send(buffer);
+  } catch (error: any) {
+    console.error("[OpenAI] Speech error:", error);
+    res.status(500).json({ error: error.message });
+  }
 });
 
 // 404 for API routes - MUST be after all API routes

@@ -42,7 +42,7 @@ export interface MoodResponse {
 }
 
 export interface ChatMessage {
-  role: 'user' | 'model';
+  role: 'user' | 'assistant';
   content: string;
   feedback?: 'up' | 'down';
 }

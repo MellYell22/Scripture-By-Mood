@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
 import { Send, Mic, ThumbsUp, ThumbsDown, Volume2, Square, VolumeX } from 'lucide-react';
-import { getChatResponse, getChatResponseStream, generateSpeech } from '../services/gemini';
+import { getChatResponse, getChatResponseStream, generateSpeech, ChatHistoryMessage } from '../services/ai';
 import { ChatMessage, Profile } from '../types';
 import { supabase, saveAIFeedback } from '../services/supabase';
 import { useMusic } from '../MusicContext';
@@ -13,7 +13,7 @@ export default function ChatScreen({ navigation }: any) {
   const { playSong, playbackError } = useMusic();
   const { profile } = useUser();
   const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: 'model', content: "Hello, I'm David. How can I encourage you today?" }
+    { role: 'assistant', content: "Hello, I'm David. How can I encourage you today?" }
   ]);
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
@@ -85,25 +85,25 @@ export default function ChatScreen({ navigation }: any) {
           ? `I found '${songResult.song.title}', but I'm having trouble starting the playback. Let me try another way...`
           : `I couldn't find '${songResult.title}' in our library, so I'm opening it on YouTube for you now...`;
         
-        setMessages(prev => [...prev, { role: 'model', content }]);
+        setMessages(prev => [...prev, { role: 'assistant', content }]);
         setLoading(false);
         return;
       }
 
-      const history = messages.map(msg => ({
-        role: msg.role as 'user' | 'model',
-        parts: [{ text: msg.content }]
+      const history: ChatHistoryMessage[] = messages.map(msg => ({
+        role: msg.role === 'user' ? 'user' : 'assistant',
+        content: msg.content
       }));
-      history.push({ role: 'user', parts: [{ text: userMessage.content }] });
+      history.push({ role: 'user', content: userMessage.content });
 
-      // Add an empty model message to start streaming into
+      // Add an empty assistant message to start streaming into
       const modelMessageIndex = messages.length + 1;
-      setMessages(prev => [...prev, { role: 'model', content: "" }]);
+      setMessages(prev => [...prev, { role: 'assistant', content: "" }]);
 
       const response = await getChatResponseStream(history, (fullText) => {
         setMessages(prev => {
           const newMessages = [...prev];
-          newMessages[modelMessageIndex] = { role: 'model', content: fullText };
+          newMessages[modelMessageIndex] = { role: 'assistant', content: fullText };
           return newMessages;
         });
       }, profile?.preferred_response_length || 'medium');
@@ -114,7 +114,7 @@ export default function ChatScreen({ navigation }: any) {
           setMessages(prev => {
             const newMessages = [...prev];
             newMessages[modelMessageIndex] = { 
-              role: 'model', 
+              role: 'assistant', 
               content: response + "\n\nI found the song, but playback did not start. Let me try another way." 
             };
             return newMessages;
@@ -123,7 +123,7 @@ export default function ChatScreen({ navigation }: any) {
       } else {
         setMessages(prev => {
           const newMessages = [...prev];
-          newMessages[modelMessageIndex] = { role: 'model', content: "I'm sorry, I couldn't process that." };
+          newMessages[modelMessageIndex] = { role: 'assistant', content: "I'm sorry, I couldn't process that." };
           return newMessages;
         });
       }
@@ -132,7 +132,7 @@ export default function ChatScreen({ navigation }: any) {
       let errorMessage = "I'm having a bit of trouble connecting right now. Let's try again in a moment.";
       
       if (error?.message?.includes("API_KEY_INVALID") || error?.message?.includes("API key not found")) {
-        errorMessage = "It looks like the API key is missing or invalid. Please ensure the GEMINI_API_KEY is set in the environment.";
+        errorMessage = "It looks like the API key is missing or invalid. Please ensure the OPENAI_API_KEY is set in the environment.";
       } else if (error?.message?.includes("quota")) {
         errorMessage = "I've reached my daily limit for conversations. Please try again later.";
       }
@@ -141,10 +141,10 @@ export default function ChatScreen({ navigation }: any) {
         const newMessages = [...prev];
         // If we added an empty message for streaming, replace it. Otherwise append.
         if (newMessages.length > messages.length + 1) {
-          newMessages[messages.length + 1] = { role: 'model', content: errorMessage };
+          newMessages[messages.length + 1] = { role: 'assistant', content: errorMessage };
           return newMessages;
         }
-        return [...prev, { role: 'model', content: errorMessage }];
+        return [...prev, { role: 'assistant', content: errorMessage }];
       });
     } finally {
       setLoading(false);
@@ -153,7 +153,7 @@ export default function ChatScreen({ navigation }: any) {
 
   const handleFeedback = async (index: number, type: 'up' | 'down') => {
     const message = messages[index];
-    if (!message || message.role !== 'model' || !profile) return;
+    if (!message || message.role !== 'assistant' || !profile) return;
 
     const isHelpful = type === 'up';
     
@@ -273,7 +273,7 @@ export default function ChatScreen({ navigation }: any) {
             ]}>
               {msg.content}
             </Text>
-            {msg.role === 'model' && (
+            {msg.role === 'assistant' && (
               <View style={styles.feedbackContainer}>
                 <TouchableOpacity 
                   onPress={() => speakMessage(index, msg.content)}

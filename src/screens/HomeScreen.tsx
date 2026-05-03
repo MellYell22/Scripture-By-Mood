@@ -7,7 +7,7 @@ const MotionView = motion(View);
 import { Profile, Scripture } from '../types';
 import { Search, Globe, Sparkles, Frown, Wind, User, Heart, Flame, Sun, HelpCircle, Layers, Zap, Video, Mic, Bookmark, Check } from 'lucide-react';
 import { OWNER_EMAIL } from '../utils/tier';
-import { getVerseReflection } from '../services/gemini';
+import { getVerseReflection } from '../services/ai';
 import { getVerseOfTheDay } from '../services/verseOfTheDay';
 import { VideoGenerator } from '../components/VideoGenerator';
 import { saveScripture } from '../services/supabase';
