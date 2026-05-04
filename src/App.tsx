@@ -29,12 +29,26 @@ import { Scripture } from './types';
 import { UserProvider, useUser } from './UserContext';
 
 function AppContent() {
-  const { session, profile, loading, refreshProfile } = useUser();
+  const { session, profile, loading: contextLoading, refreshProfile } = useUser();
+  const [forceLoadingFinished, setForceLoadingFinished] = useState(false);
   const [currentRoute, setCurrentRoute] = useState('Home');
   const [routeParams, setRouteParams] = useState<any>(null);
   const [showVerseModal, setShowVerseModal] = useState(false);
   const [dailyVerse, setDailyVerse] = useState<Scripture | null>(null);
   const { currentSong, stopSong, nextSong, prevSong, setPlaybackError } = useMusic();
+
+  // Secondary safety net for loading state
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (contextLoading) {
+        console.warn('[App] AppContent safety timeout hit (15s). Forcing loading to false.');
+        setForceLoadingFinished(true);
+      }
+    }, 15000);
+    return () => clearTimeout(timer);
+  }, [contextLoading]);
+
+  const loading = contextLoading && !forceLoadingFinished;
 
   useEffect(() => {
     // Handle initial route based on URL path

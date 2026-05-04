@@ -17,6 +17,17 @@ export function UserProvider({ children }: { children: ReactNode }) {
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
 
+  // Safety net: ensure loading screen eventually disappears
+  useEffect(() => {
+    if (loading) {
+      const timer = setTimeout(() => {
+        console.warn('[UserContext] Loading safety timeout reached (12s). Forcing app to initialize.');
+        setLoading(false);
+      }, 12000); 
+      return () => clearTimeout(timer);
+    }
+  }, [loading]);
+
   useEffect(() => {
     if (!isSupabaseConfigured) {
       setLoading(false);
@@ -88,12 +99,15 @@ export function UserProvider({ children }: { children: ReactNode }) {
         .eq('id', userId)
         .maybeSingle();
 
-      if (error) throw error;
+      if (error) {
+        console.error(`[UserContext] Supabase profile fetch error:`, error);
+        throw error;
+      };
       
       if (!data) {
         if (retries > 0) {
-          console.log(`[UserContext] Profile not found for ${userId}, retrying in 1.5s...`);
-          setTimeout(() => fetchProfile(userId, retries - 1), 1500);
+          console.log(`[UserContext] Profile not found for ${userId}, retrying in 2s...`);
+          setTimeout(() => fetchProfile(userId, retries - 1), 2000);
           return;
         }
         console.error(`[UserContext] Profile not found after all retries for user ${userId}`);
@@ -109,10 +123,15 @@ export function UserProvider({ children }: { children: ReactNode }) {
         profileData.preferred_response_length = 'medium';
       }
       setProfile(profileData);
+      setLoading(false);
     } catch (error) {
-      console.error('[UserContext] Error fetching profile:', error);
-    } finally {
-      if (retries === 0 || profile) setLoading(false);
+      console.error('[UserContext] Exception in fetchProfile:', error);
+      if (retries === 0) {
+        setLoading(false);
+      } else {
+        // Retry on exception too
+        setTimeout(() => fetchProfile(userId, retries - 1), 2000);
+      }
     }
   };
 
@@ -133,6 +152,8 @@ export function UserProvider({ children }: { children: ReactNode }) {
       if (user) {
         console.log(`[UserContext] Found user via getUser fallback: ${user.id}`);
         await fetchProfile(user.id);
+      } else {
+        setLoading(false);
       }
     }
   };
