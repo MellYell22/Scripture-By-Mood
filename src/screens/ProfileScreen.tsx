@@ -1,12 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Alert, TextInput } from 'react-native';
-import { supabase } from '../services/supabase';
-import { Profile } from '../types';
-import { LogOut, CreditCard, Shield, CheckCircle2, AlertCircle, Lock, Star, Bookmark, Trash2, Check, ExternalLink, ChevronDown, ChevronUp } from 'lucide-react';
+import { LogOut, CheckCircle2, AlertCircle, Lock, Star, Bookmark, Trash2, Check, ChevronDown, ChevronUp } from 'lucide-react';
 import { createCheckoutSession } from '../services/stripe';
 import { OWNER_EMAIL, hasProAccess } from '../utils/tier';
 import { PLANS } from '../constants';
-import { getSavedScriptures, toggleMemorized, deleteSavedScripture, updateScriptureCategory } from '../services/supabase';
+import { supabase, getSavedScriptures, toggleMemorized, deleteSavedScripture, updateScriptureCategory } from '../services/supabase';
 import { SavedScripture } from '../types';
 
 import { useUser } from '../UserContext';
@@ -21,9 +19,9 @@ export default function ProfileScreen({ route, navigation }: { route?: { params?
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [isActivating, setIsActivating] = useState(false);
   const hasHandledRedirect = useRef(false);
-  const pollingInterval = useRef<NodeJS.Timeout | null>(null);
+  const pollingInterval = useRef<ReturnType<typeof setTimeout> | null>(null);
   const scrollViewRef = useRef<ScrollView>(null);
-  const pricingRef = useRef<View>(null);
+  const [pricingY, setPricingY] = useState<number | null>(null);
 
   useEffect(() => {
     return () => {
@@ -47,92 +45,102 @@ export default function ProfileScreen({ route, navigation }: { route?: { params?
   }, [isActivating, profile?.subscription_tier]);
 
   useEffect(() => {
-    if (route?.params?.showPricing && !showSavedScriptures) {
-      setTimeout(() => {
-        pricingRef.current?.measureLayout(
-          (scrollViewRef.current as any).getInnerViewNode(),
-          (x, y) => {
-            scrollViewRef.current?.scrollTo({ y: y - 20, animated: true });
-          },
-          () => { }
-        );
-      }, 500);
+    if (route?.params?.showPricing && !showSavedScriptures && pricingY !== null) {
+      const timer = setTimeout(() => {
+        scrollViewRef.current?.scrollTo({ y: Math.max(pricingY - 20, 0), animated: true });
+      }, 300);
+
+      return () => clearTimeout(timer);
     }
-  }, [route?.params?.showPricing, showSavedScriptures]);
+  }, [route?.params?.showPricing, showSavedScriptures, pricingY]);
 
   useEffect(() => {
-    // Return early if we've already handled this redirect in this component instance
     if (hasHandledRedirect.current) return;
 
-    // Check for URL parameters (success/canceled)
-    const urlParams = new URLSearchParams(window.location.search);
-    const success = urlParams.get('success') === 'true' || route?.params?.success || route?.params?.paymentSuccess;
-    const canceled = urlParams.get('canceled') === 'true' || route?.params?.canceled;
-    const showPricing = route?.params?.showPricing;
+    const handleStripeRedirect = async () => {
+      try {
+        const hasWindow = typeof window !== 'undefined';
+        const urlParams = hasWindow ? new URLSearchParams(window.location.search) : null;
 
-    if (success || canceled) {
-      console.log(`[StripeDebug] Handling Stripe redirect. Success: ${!!success}, Canceled: ${!!canceled}`);
+        const success =
+          urlParams?.get('success') === 'true' ||
+          route?.params?.success === true ||
+          route?.params?.paymentSuccess === true;
 
-      // Mark as handled to prevent re-triggering within this lifecycle
-      hasHandledRedirect.current = true;
+        const canceled =
+          urlParams?.get('canceled') === 'true' ||
+          route?.params?.canceled === true;
 
-      // Update state based on parameters
-      if (success) {
-        if (profile?.subscription_tier !== 'pro') {
-          setIsActivating(true);
-          setStatusMessage({ text: 'Payment received! Activating your Pro plan...', type: 'info' });
+        if (!success && !canceled) return;
 
-          // Start polling for subscription update
-          let attempts = 0;
-          const maxAttempts = 20; // 20 attempts * 3 seconds = 60 seconds
+        console.log(`[StripeDebug] Handling Stripe redirect. Success: ${!!success}, Canceled: ${!!canceled}`);
+        hasHandledRedirect.current = true;
 
-          const checkStatus = async () => {
-            attempts++;
-            console.log(`[StripeDebug] Polling subscription status (Attempt ${attempts}/${maxAttempts})...`);
+        if (success) {
+          if (profile?.subscription_tier === 'pro' || profile?.subscription_tier === 'owner') {
+            setStatusMessage({ text: 'Subscription updated successfully! Welcome to the Pro family.', type: 'success' });
+          } else {
+            setIsActivating(true);
+            setStatusMessage({ text: 'Payment received! Activating your Pro plan...', type: 'info' });
 
-            const latestProfile = await refreshProfile(false);
+            let attempts = 0;
+            const maxAttempts = 20;
 
-            if (latestProfile?.subscription_tier === 'pro' || latestProfile?.subscription_tier === 'owner') {
-              console.log('[StripeDebug] PRO STATUS CONFIRMED via manual fetch! Unlocking app features.');
-              setIsActivating(false);
-              setStatusMessage({ text: 'Activation complete! Welcome to the Pro family.', type: 'success' });
-              return; // Stop polling
-            }
+            const checkStatus = async () => {
+              attempts += 1;
+              console.log(`[StripeDebug] Polling subscription status (Attempt ${attempts}/${maxAttempts})...`);
 
-            if (attempts >= maxAttempts) {
-              setIsActivating(false);
-              setStatusMessage({
-                text: 'Activation is taking a bit longer than expected. It will update automatically in a few moments.',
-                type: 'info'
-              });
-              return; // Stop polling
-            }
+              try {
+                const latestProfile = await refreshProfile(false);
+                const latestTier = latestProfile?.subscription_tier;
 
-            // Schedule next attempt
-            pollingInterval.current = setTimeout(checkStatus, 2000);
-          };
+                if (latestTier === 'pro' || latestTier === 'owner') {
+                  console.log('[StripeDebug] PRO STATUS CONFIRMED via manual fetch! Unlocking app features.');
+                  setIsActivating(false);
+                  setStatusMessage({ text: 'Activation complete! Welcome to the Pro family.', type: 'success' });
+                  return;
+                }
+              } catch (error: any) {
+                console.error('[StripeDebug] Subscription polling failed:', error?.message || error);
+              }
 
-          // Start the polling chain
-          checkStatus();
-        } else {
-          setStatusMessage({ text: 'Subscription updated successfully! Welcome to the Pro family.', type: 'success' });
+              if (attempts >= maxAttempts) {
+                setIsActivating(false);
+                setStatusMessage({
+                  text: 'Activation is taking a bit longer than expected. It will update automatically in a few moments.',
+                  type: 'info'
+                });
+                return;
+              }
+
+              pollingInterval.current = setTimeout(checkStatus, 2000);
+            };
+
+            await checkStatus();
+          }
+        } else if (canceled) {
+          setStatusMessage({ text: 'Checkout canceled. No changes were made.', type: 'info' });
         }
-      } else if (canceled) {
-        setStatusMessage({ text: 'Checkout canceled. No changes were made.', type: 'info' });
-      }
 
-      // 1. Clear Params from React Navigation state if possible
-      if (navigation && navigation.setParams) {
-        navigation.setParams({ success: undefined, canceled: undefined });
-      }
+        if (navigation?.setParams) {
+          navigation.setParams({ success: undefined, canceled: undefined, paymentSuccess: undefined });
+        }
 
-      // 2. Clear params from Browser URL bar without reload
-      if (typeof window !== 'undefined' && window.history) {
-        const cleanUrl = window.location.pathname;
-        window.history.replaceState({}, '', cleanUrl);
+        if (hasWindow && window.history) {
+          window.history.replaceState({}, '', window.location.pathname);
+        }
+      } catch (error: any) {
+        console.error('[StripeDebug] Redirect handling crashed safely:', error?.message || error);
+        setIsActivating(false);
+        setStatusMessage({
+          text: 'We could not verify checkout automatically. Refresh your profile in a moment.',
+          type: 'info'
+        });
       }
-    }
-  }, [route?.params, refreshProfile, navigation]);
+    };
+
+    handleStripeRedirect();
+  }, [route?.params, refreshProfile, navigation, profile?.subscription_tier]);
 
   const handleLogout = async () => {
     await signOut();
@@ -306,7 +314,7 @@ export default function ProfileScreen({ route, navigation }: { route?: { params?
 
                 {expandedId === item.id && (
                   <View style={styles.savedCardContent}>
-                    <Text style={styles.savedText}>"{item.text}"</Text>
+                    <Text style={styles.savedText}>"{item.verse}"</Text>
 
                     <View style={styles.categoryInputRow}>
                       <Text style={styles.categoryLabel}>CATEGORY</Text>
@@ -452,9 +460,12 @@ export default function ProfileScreen({ route, navigation }: { route?: { params?
             )}
           </View>
 
-          <Text style={styles.sectionTitle} onLayout={(e) => {
-            // Fallback for measurement if needed
-          }} ref={pricingRef}>Subscription Plans</Text>
+          <Text
+            style={styles.sectionTitle}
+            onLayout={(event) => setPricingY(event.nativeEvent.layout.y)}
+          >
+            Subscription Plans
+          </Text>
 
           {Object.values(PLANS).map((plan) => {
             const currentTier = profile?.subscription_tier || 'free';
