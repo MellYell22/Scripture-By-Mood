@@ -1,56 +1,12 @@
-import React, { useEffect, useRef, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, TextInput } from 'react-native';
+import React, { useState, useEffect, useRef } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Alert, TextInput } from 'react-native';
 import { supabase } from '../services/supabase';
-<<<<<<< HEAD
-import { Profile } from '../types';
-import { LogOut, CreditCard, Shield, CheckCircle2, AlertCircle, Lock, Star, Bookmark, Trash2, Check, ExternalLink, ChevronDown, ChevronUp } from 'lucide-react';
+import { LogOut, CreditCard, Shield, CheckCircle2, AlertCircle, Lock, Star, Bookmark, Trash2, Check, ChevronDown, ChevronUp, RefreshCw } from 'lucide-react';
 import { createCheckoutSession } from '../services/stripe';
 import { OWNER_EMAIL, hasProAccess } from '../utils/tier';
 import { PLANS } from '../constants';
 import { getSavedScriptures, toggleMemorized, deleteSavedScripture, updateScriptureCategory } from '../services/supabase';
 import { SavedScripture } from '../types';
-
-import { useUser } from '../UserContext';
-
-export default function ProfileScreen({ route, navigation }: { route?: { params?: any }, navigation?: any }) {
-  const { profile, refreshProfile, signOut } = useUser();
-  const [loading, setLoading] = useState(false);
-  const [statusMessage, setStatusMessage] = useState<{ text: string, type: 'success' | 'error' | 'info' } | null>(null);
-  const [showSavedScriptures, setShowSavedScriptures] = useState(false);
-  const [savedScriptures, setSavedScriptures] = useState<SavedScripture[]>([]);
-  const [loadingSaved, setLoadingSaved] = useState(false);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [isActivating, setIsActivating] = useState(false);
-  const hasHandledRedirect = useRef(false);
-  const pollingInterval = useRef<NodeJS.Timeout | null>(null);
-  const scrollViewRef = useRef<ScrollView>(null);
-  const pricingRef = useRef<View>(null);
-
-  useEffect(() => {
-    return () => {
-      if (pollingInterval.current) {
-        clearInterval(pollingInterval.current);
-        pollingInterval.current = null;
-      }
-    };
-  }, []);
-
-  useEffect(() => {
-    if (isActivating && profile?.subscription_tier === 'pro') {
-      console.log('[StripeDebug] Pro tier detected! Stopping polling.');
-      setIsActivating(false);
-      setStatusMessage({ text: 'Activation complete! Welcome to the Pro family.', type: 'success' });
-      if (pollingInterval.current) {
-        clearInterval(pollingInterval.current);
-        pollingInterval.current = null;
-      }
-    }
-  }, [isActivating, profile?.subscription_tier]);
-=======
-import { LogOut, CheckCircle2, AlertCircle, Lock, Star, Shield, CreditCard, RefreshCw } from 'lucide-react';
-import { createCheckoutSession } from '../services/stripe';
-import { OWNER_EMAIL, hasProAccess } from '../utils/tier';
-import { PLANS } from '../constants';
 import { useUser } from '../UserContext';
 
 const MAX_CONFIRMATION_ATTEMPTS = 15;
@@ -68,23 +24,33 @@ type ProfileScreenProps = {
     params?: {
       success?: boolean;
       canceled?: boolean;
+      paymentSuccess?: boolean;
+      showPricing?: boolean;
     };
   };
+  navigation?: any;
 };
 
-export default function ProfileScreen({ route }: ProfileScreenProps) {
+export default function ProfileScreen({ route, navigation }: ProfileScreenProps) {
   const { profile, refreshProfile, signOut } = useUser();
   const [loading, setLoading] = useState(false);
   const [statusMessage, setStatusMessage] = useState<StatusMessage | null>(null);
+  const [showSavedScriptures, setShowSavedScriptures] = useState(false);
+  const [savedScriptures, setSavedScriptures] = useState<SavedScripture[]>([]);
+  const [loadingSaved, setLoadingSaved] = useState(false);
+  const [expandedId, setExpandedId] = useState<string | null>(null);
   const [confirmationState, setConfirmationState] = useState<ConfirmationState>('idle');
   const [confirmationAttempts, setConfirmationAttempts] = useState(0);
   const hasHandledRedirect = useRef(false);
   const pollingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pathCleanupTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const scrollViewRef = useRef<ScrollView>(null);
+  const pricingRef = useRef<View>(null);
 
-  const isSuccessRedirect = Boolean(route?.params?.success);
+  const isActivating = confirmationState === 'checking';
+  const isSuccessRedirect = Boolean(route?.params?.success || route?.params?.paymentSuccess);
   const isCanceledRedirect = Boolean(route?.params?.canceled);
-  const isBusy = loading || confirmationState === 'checking';
+  const isBusy = loading || isActivating;
 
   const clearPollingTimeout = () => {
     if (pollingTimeoutRef.current) {
@@ -100,9 +66,17 @@ export default function ProfileScreen({ route }: ProfileScreenProps) {
     }
   };
 
-  const replaceProfilePath = () => {
-    if (typeof window !== 'undefined' && window.location.pathname !== '/profile') {
-      window.history.replaceState({}, document.title, '/profile');
+  const cleanupRedirectState = () => {
+    if (navigation?.setParams) {
+      navigation.setParams({
+        success: undefined,
+        canceled: undefined,
+        paymentSuccess: undefined,
+      });
+    }
+
+    if (typeof window !== 'undefined' && window.history) {
+      window.history.replaceState({}, '', '/profile');
     }
   };
 
@@ -113,48 +87,82 @@ export default function ProfileScreen({ route }: ProfileScreenProps) {
     };
   }, []);
 
+  useEffect(() => {
+    if (route?.params?.showPricing && !showSavedScriptures) {
+      setTimeout(() => {
+        const innerViewNode = (scrollViewRef.current as any)?.getInnerViewNode?.();
+        if (!pricingRef.current || !innerViewNode) return;
+
+        pricingRef.current.measureLayout(
+          innerViewNode,
+          (_x, y) => {
+            scrollViewRef.current?.scrollTo({ y: y - 20, animated: true });
+          },
+          () => {}
+        );
+      }, 500);
+    }
+  }, [route?.params?.showPricing, showSavedScriptures]);
+
+  useEffect(() => {
+    if (!showSavedScriptures || !profile) return;
+    void fetchSavedScriptures();
+  }, [showSavedScriptures, profile?.id]);
+
+  useEffect(() => {
+    if (!isActivating) return;
+    if (profile?.subscription_tier !== 'pro' && profile?.subscription_tier !== 'owner') return;
+
+    clearPollingTimeout();
+    setConfirmationState('confirmed');
+    setStatusMessage({ text: 'Activation complete! Welcome to the Pro family.', type: 'success' });
+    pathCleanupTimeoutRef.current = setTimeout(() => {
+      cleanupRedirectState();
+    }, 1500);
+  }, [isActivating, profile?.subscription_tier]);
+
   const confirmSubscription = async () => {
     clearPollingTimeout();
     clearPathCleanupTimeout();
     setConfirmationState('checking');
     setConfirmationAttempts(0);
-    setStatusMessage(null);
+    setStatusMessage({
+      text: 'Payment received. Confirming your subscription now...',
+      type: 'info',
+    });
 
-    let attempt = 0;
+    let attempts = 0;
 
     const checkStatus = async () => {
-      attempt += 1;
-      setConfirmationAttempts(attempt);
-      console.log(`[ProfileScreen] Confirming Stripe upgrade. Attempt ${attempt}/${MAX_CONFIRMATION_ATTEMPTS}`);
+      attempts += 1;
+      setConfirmationAttempts(attempts);
+      console.log(`[StripeDebug] Confirming subscription status (Attempt ${attempts}/${MAX_CONFIRMATION_ATTEMPTS})`);
 
       try {
         const latestProfile = await refreshProfile(false);
         const latestTier = latestProfile?.subscription_tier;
 
         if (latestTier === 'pro' || latestTier === 'owner') {
-          console.log('[ProfileScreen] Pro access confirmed from refreshProfile response.');
+          console.log('[StripeDebug] Pro tier confirmed from refreshProfile response.');
           setConfirmationState('confirmed');
-          setStatusMessage({
-            text: 'Subscription confirmed. Your Pro access is now active.',
-            type: 'success',
-          });
+          setStatusMessage({ text: 'Subscription confirmed. Welcome to the Pro family.', type: 'success' });
           pathCleanupTimeoutRef.current = setTimeout(() => {
-            replaceProfilePath();
+            cleanupRedirectState();
           }, 1500);
           return;
         }
       } catch (error) {
-        console.error('[ProfileScreen] Subscription confirmation refresh failed:', error);
+        console.error('[StripeDebug] Subscription confirmation refresh failed:', error);
       }
 
-      if (attempt >= MAX_CONFIRMATION_ATTEMPTS) {
-        console.warn('[ProfileScreen] Subscription confirmation timed out.');
+      if (attempts >= MAX_CONFIRMATION_ATTEMPTS) {
+        console.warn('[StripeDebug] Subscription confirmation timed out.');
         setConfirmationState('timed_out');
         setStatusMessage({
-          text: 'Your payment succeeded, but Pro access is still syncing. Tap refresh below to check again.',
+          text: 'Your payment succeeded, but Pro access is still syncing. Use the refresh button below to check again.',
           type: 'info',
         });
-        replaceProfilePath();
+        cleanupRedirectState();
         return;
       }
 
@@ -167,126 +175,31 @@ export default function ProfileScreen({ route }: ProfileScreenProps) {
   };
 
   useEffect(() => {
-    if (confirmationState !== 'checking') return;
-
-    if (profile?.subscription_tier === 'pro' || profile?.subscription_tier === 'owner') {
-      clearPollingTimeout();
-      setConfirmationState('confirmed');
-      setStatusMessage({
-        text: 'Subscription confirmed. Your Pro access is now active.',
-        type: 'success',
-      });
-      pathCleanupTimeoutRef.current = setTimeout(() => {
-        replaceProfilePath();
-      }, 1500);
-    }
-  }, [confirmationState, profile?.subscription_tier]);
-
-  useEffect(() => {
-    if (hasHandledRedirect.current) return;
-    if (!isSuccessRedirect && !isCanceledRedirect) return;
->>>>>>> 61252ec (Update profile subscription confirmation flow)
-
-  useEffect(() => {
-    if (route?.params?.showPricing && !showSavedScriptures) {
-      setTimeout(() => {
-        pricingRef.current?.measureLayout(
-          (scrollViewRef.current as any).getInnerViewNode(),
-          (x, y) => {
-            scrollViewRef.current?.scrollTo({ y: y - 20, animated: true });
-          },
-          () => {}
-        );
-      }, 500);
-    }
-  }, [route?.params?.showPricing, showSavedScriptures]);
-
-<<<<<<< HEAD
-  useEffect(() => {
-    // Return early if we've already handled this redirect in this component instance
     if (hasHandledRedirect.current) return;
 
-    // Check for URL parameters (success/canceled)
-    const urlParams = new URLSearchParams(window.location.search);
-    const success = urlParams.get('success') === 'true' || route?.params?.success || route?.params?.paymentSuccess;
-    const canceled = urlParams.get('canceled') === 'true' || route?.params?.canceled;
-    const showPricing = route?.params?.showPricing;
+    const urlParams = typeof window !== 'undefined' ? new URLSearchParams(window.location.search) : null;
+    const successFromUrl = urlParams?.get('success') === 'true';
+    const canceledFromUrl = urlParams?.get('canceled') === 'true';
+    const shouldHandleSuccess = successFromUrl || isSuccessRedirect;
+    const shouldHandleCanceled = canceledFromUrl || isCanceledRedirect;
 
-    if (success || canceled) {
-      console.log(`[StripeDebug] Handling Stripe redirect. Success: ${!!success}, Canceled: ${!!canceled}`);
-      
-      // Mark as handled to prevent re-triggering within this lifecycle
-      hasHandledRedirect.current = true;
+    if (!shouldHandleSuccess && !shouldHandleCanceled) return;
 
-      // Update state based on parameters
-      if (success) {
-        if (profile?.subscription_tier !== 'pro') {
-          setIsActivating(true);
-          setStatusMessage({ text: 'Payment received! Activating your Pro plan...', type: 'info' });
-          
-          // Start polling for subscription update
-          let attempts = 0;
-          const maxAttempts = 20; // 20 attempts * 3 seconds = 60 seconds
-          
-          pollingInterval.current = setInterval(async () => {
-            attempts++;
-            console.log(`[StripeDebug] Polling subscription status (Attempt ${attempts}/${maxAttempts})...`);
-            
-            // Call fetch directly to avoid setting global loading state if desired
-            // Use background refresh to avoid full-screen loader
-            await refreshProfile(false);
-            
-            if (attempts >= maxAttempts) {
-              if (pollingInterval.current) {
-                clearInterval(pollingInterval.current);
-                pollingInterval.current = null;
-              }
-              setIsActivating(false);
-              setStatusMessage({ 
-                text: 'Activation is taking a bit longer than expected. It will update automatically in a few moments.', 
-                type: 'info' 
-              });
-            }
-          }, 3000);
-        } else {
-          setStatusMessage({ text: 'Subscription updated successfully! Welcome to the Pro family.', type: 'success' });
-        }
-      } else if (canceled) {
-        setStatusMessage({ text: 'Checkout canceled. No changes were made.', type: 'info' });
-      }
+    hasHandledRedirect.current = true;
+    console.log(`[StripeDebug] Handling Stripe redirect. Success: ${shouldHandleSuccess}, Canceled: ${shouldHandleCanceled}`);
 
-      // 1. Clear Params from React Navigation state if possible
-      if (navigation && navigation.setParams) {
-        navigation.setParams({ success: undefined, canceled: undefined });
-      }
-
-      // 2. Clear params from Browser URL bar without reload
-      if (typeof window !== 'undefined' && window.history) {
-        const cleanUrl = window.location.pathname;
-        window.history.replaceState({}, '', cleanUrl);
-      }
-    }
-  }, [route?.params, refreshProfile, navigation]);
-=======
-    if (isCanceledRedirect) {
+    if (shouldHandleCanceled) {
       setStatusMessage({ text: 'Checkout canceled. No changes were made.', type: 'info' });
-      replaceProfilePath();
+      cleanupRedirectState();
       return;
     }
 
     void confirmSubscription();
   }, [isSuccessRedirect, isCanceledRedirect, refreshProfile]);
->>>>>>> 61252ec (Update profile subscription confirmation flow)
 
   const handleLogout = async () => {
     await signOut();
   };
-
-  useEffect(() => {
-    if (showSavedScriptures && profile) {
-      fetchSavedScriptures();
-    }
-  }, [showSavedScriptures, profile]);
 
   const fetchSavedScriptures = async () => {
     if (!profile) return;
@@ -294,7 +207,7 @@ export default function ProfileScreen({ route }: ProfileScreenProps) {
     try {
       const data = await getSavedScriptures(profile.id);
       setSavedScriptures(data);
-    } catch (error: any) {
+    } catch (error) {
       console.error('Error fetching saved scriptures:', error);
     } finally {
       setLoadingSaved(false);
@@ -304,7 +217,9 @@ export default function ProfileScreen({ route }: ProfileScreenProps) {
   const handleToggleMemorized = async (item: SavedScripture) => {
     try {
       await toggleMemorized(item.id, !item.is_memorized);
-      setSavedScriptures(prev => prev.map(s => s.id === item.id ? { ...s, is_memorized: !s.is_memorized } : s));
+      setSavedScriptures((prev) => prev.map((saved) => (
+        saved.id === item.id ? { ...saved, is_memorized: !saved.is_memorized } : saved
+      )));
     } catch (error) {
       console.error('Error toggling memorized:', error);
     }
@@ -316,42 +231,34 @@ export default function ProfileScreen({ route }: ProfileScreenProps) {
       'Are you sure you want to remove this verse from your list?',
       [
         { text: 'Cancel', style: 'cancel' },
-        { 
-          text: 'Delete', 
+        {
+          text: 'Delete',
           style: 'destructive',
           onPress: async () => {
             try {
               await deleteSavedScripture(id);
-              setSavedScriptures(prev => prev.filter(s => s.id !== id));
+              setSavedScriptures((prev) => prev.filter((saved) => saved.id !== id));
             } catch (error) {
               console.error('Error deleting scripture:', error);
             }
-          }
-        }
+          },
+        },
       ]
     );
   };
 
   const handleUpgrade = async (tierId: string) => {
     if (!profile) return;
-
     setLoading(true);
     setStatusMessage(null);
-<<<<<<< HEAD
-    
-    const plan = Object.values(PLANS).find(p => p.id === tierId);
-    
-=======
 
     const plan = Object.values(PLANS).find((candidate) => candidate.id === tierId);
->>>>>>> 61252ec (Update profile subscription confirmation flow)
     console.log(`[StripeDebug] Upgrade button clicked: ${tierId}`);
-    
+
     try {
       if (!plan || !plan.priceId) {
         throw new Error(`Price ID for ${tierId} plan is not configured.`);
       }
-
       await createCheckoutSession(plan.priceId);
     } catch (error: any) {
       console.error(`[StripeDebug] Upgrade error: ${error.message}`);
@@ -363,23 +270,16 @@ export default function ProfileScreen({ route }: ProfileScreenProps) {
 
   const updatePreference = async (field: string, value: any) => {
     if (!profile) return;
-
     setLoading(true);
-
     try {
-<<<<<<< HEAD
       const { error } = await supabase
-=======
-      const { error } = await supabase!
->>>>>>> 61252ec (Update profile subscription confirmation flow)
         .from('profiles')
         .update({ [field]: value })
         .eq('id', profile.id);
-      
-      if (error) throw error;
 
+      if (error) throw error;
       await refreshProfile(false);
-      setStatusMessage({ text: 'Preferences updated.', type: 'success' });
+      setStatusMessage({ text: 'Preferences updated!', type: 'success' });
     } catch (error: any) {
       setStatusMessage({ text: error.message, type: 'error' });
     } finally {
@@ -401,19 +301,17 @@ export default function ProfileScreen({ route }: ProfileScreenProps) {
         ? styles.errorText
         : styles.infoText;
 
-  const showConfirmationCard = isSuccessRedirect || confirmationState !== 'idle';
-
   return (
-    <ScrollView 
+    <ScrollView
       ref={scrollViewRef}
-      style={styles.container} 
+      style={styles.container}
       contentContainerStyle={styles.content}
     >
       <View style={styles.header}>
         {isActivating && (
           <View style={styles.activatingLoader}>
             <ActivityIndicator size="small" color="#d4af37" />
-            <Text style={styles.activatingText}>ACTIVATING PRO FEATURES...</Text>
+            <Text style={styles.activatingText}>CONFIRMING YOUR SUBSCRIPTION...</Text>
           </View>
         )}
         <View style={styles.avatar}>
@@ -422,57 +320,99 @@ export default function ProfileScreen({ route }: ProfileScreenProps) {
         <Text style={styles.email}>{profile?.email}</Text>
         <View style={styles.tierBadge}>
           <Text style={styles.tierText}>
-            {profile?.email === OWNER_EMAIL ? 'OWNER (FULL ACCESS)' : profile?.subscription_tier?.toUpperCase() || 'FREE'}
+            {profile?.email === OWNER_EMAIL ? 'OWNER (FULL ACCESS)' : (profile?.subscription_tier?.toUpperCase() || 'FREE')}
           </Text>
         </View>
       </View>
 
-<<<<<<< HEAD
       <View style={styles.tabContainer}>
-        <TouchableOpacity 
-          style={[styles.tab, !showSavedScriptures && styles.tabActive]} 
+        <TouchableOpacity
+          style={[styles.tab, !showSavedScriptures && styles.tabActive]}
           onPress={() => setShowSavedScriptures(false)}
         >
           <Text style={[styles.tabText, !showSavedScriptures && styles.tabTextActive]}>SETTINGS</Text>
         </TouchableOpacity>
-        <TouchableOpacity 
-          style={[styles.tab, showSavedScriptures && styles.tabActive]} 
+        <TouchableOpacity
+          style={[styles.tab, showSavedScriptures && styles.tabActive]}
           onPress={() => setShowSavedScriptures(true)}
         >
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+          <View style={styles.savedTabInner}>
             <Bookmark size={12} color={showSavedScriptures ? '#d4af37' : 'rgba(212, 175, 55, 0.4)'} />
             <Text style={[styles.tabText, showSavedScriptures && styles.tabTextActive]}>SAVED</Text>
           </View>
         </TouchableOpacity>
       </View>
 
+      {confirmationState !== 'idle' && (
+        <View style={styles.confirmationCard}>
+          <View style={styles.confirmationIconWrap}>
+            {confirmationState === 'checking' ? (
+              <ActivityIndicator size="large" color="#d4af37" />
+            ) : confirmationState === 'confirmed' ? (
+              <CheckCircle2 size={42} color="#10B981" />
+            ) : (
+              <AlertCircle size={42} color="#d4af37" />
+            )}
+          </View>
+          <Text style={styles.confirmationTitle}>
+            {confirmationState === 'checking'
+              ? 'Confirming Your Subscription'
+              : confirmationState === 'confirmed'
+                ? 'Pro Access Confirmed'
+                : 'Still Syncing Your Upgrade'}
+          </Text>
+          <Text style={styles.confirmationText}>
+            {confirmationState === 'checking'
+              ? 'We are refreshing your account and checking the returned profile for your Pro tier.'
+              : confirmationState === 'confirmed'
+                ? 'Your account is updated and your Pro features are now unlocked.'
+                : 'Your payment went through, but the profile update has not landed yet. This usually resolves shortly after Stripe and Supabase finish syncing.'}
+          </Text>
+          {confirmationState === 'checking' && (
+            <Text style={styles.confirmationMeta}>
+              Attempt {confirmationAttempts} of {MAX_CONFIRMATION_ATTEMPTS}
+            </Text>
+          )}
+          {confirmationState === 'timed_out' && (
+            <TouchableOpacity
+              style={styles.confirmationActionButton}
+              onPress={() => void confirmSubscription()}
+              disabled={isBusy}
+            >
+              <RefreshCw size={16} color="#0b1e3d" />
+              <Text style={styles.confirmationActionText}>Refresh Subscription Status</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+      )}
+
       {showSavedScriptures ? (
         <View style={styles.savedSection}>
           <View style={styles.savedHeader}>
             <Text style={styles.sectionTitle}>My Saved Scriptures</Text>
-            <TouchableOpacity onPress={fetchSavedScriptures} disabled={loadingSaved}>
-              <Text style={{ fontSize: 10, color: '#d4af37', fontWeight: 'bold' }}>REFRESH</Text>
+            <TouchableOpacity onPress={() => void fetchSavedScriptures()} disabled={loadingSaved}>
+              <Text style={styles.savedRefreshText}>REFRESH</Text>
             </TouchableOpacity>
           </View>
 
           {loadingSaved ? (
-            <ActivityIndicator size="large" color="#d4af37" style={{ marginTop: 40 }} />
+            <ActivityIndicator size="large" color="#d4af37" style={styles.savedLoader} />
           ) : savedScriptures.length === 0 ? (
             <View style={styles.emptySaved}>
-              <Bookmark size={40} color="rgba(212, 175, 55, 0.1)" style={{ marginBottom: 15 }} />
+              <Bookmark size={40} color="rgba(212, 175, 55, 0.1)" style={styles.emptySavedIcon} />
               <Text style={styles.emptySavedText}>Your saved list is empty.</Text>
               <Text style={styles.emptySavedSubtext}>Verses you save from search or the home screen will appear here.</Text>
             </View>
           ) : (
             savedScriptures.map((item) => (
               <View key={item.id} style={[styles.savedCard, item.is_memorized && styles.memorizedCard]}>
-                <TouchableOpacity 
+                <TouchableOpacity
                   style={styles.savedCardHeader}
                   onPress={() => setExpandedId(expandedId === item.id ? null : item.id)}
                 >
                   <View style={styles.savedCardTitleRow}>
-                    <View style={[styles.memorizedDot, { backgroundColor: item.is_memorized ? '#10B981' : 'rgba(212, 175, 55, 0.3)' }]} />
-                    <View style={{ flex: 1 }}>
+                    <View style={[styles.memorizedDot, item.is_memorized && styles.memorizedDotActive]} />
+                    <View style={styles.savedCardTitleContent}>
                       <Text style={styles.savedReference}>{item.reference}</Text>
                       <Text style={styles.savedCategory}>{item.category || 'Uncategorized'} • {item.version}</Text>
                     </View>
@@ -483,38 +423,42 @@ export default function ProfileScreen({ route }: ProfileScreenProps) {
                 {expandedId === item.id && (
                   <View style={styles.savedCardContent}>
                     <Text style={styles.savedText}>"{item.text}"</Text>
-                    
+
                     <View style={styles.categoryInputRow}>
                       <Text style={styles.categoryLabel}>CATEGORY</Text>
-                      <TextInput 
+                      <TextInput
                         style={styles.categoryInput}
                         value={item.category || ''}
                         onChangeText={(text) => {
-                          setSavedScriptures(prev => prev.map(s => s.id === item.id ? { ...s, category: text } : s));
+                          setSavedScriptures((prev) => prev.map((saved) => (
+                            saved.id === item.id ? { ...saved, category: text } : saved
+                          )));
                         }}
-                        onBlur={() => updateScriptureCategory(item.id, item.category || 'Uncategorized')}
+                        onBlur={() => {
+                          void updateScriptureCategory(item.id, item.category || 'Uncategorized');
+                        }}
                         placeholder="Add category..."
                         placeholderTextColor="rgba(212, 175, 55, 0.3)"
                       />
                     </View>
-                    
+
                     <View style={styles.savedActions}>
-                      <TouchableOpacity 
+                      <TouchableOpacity
                         style={[styles.actionBtn, item.is_memorized && styles.memorizedBtn]}
-                        onPress={() => handleToggleMemorized(item)}
+                        onPress={() => void handleToggleMemorized(item)}
                       >
                         <Check size={14} color={item.is_memorized ? '#fff' : '#10B981'} />
-                        <Text style={[styles.actionBtnText, item.is_memorized && { color: '#fff' }]}>
+                        <Text style={[styles.actionBtnText, item.is_memorized && styles.actionBtnTextInverted]}>
                           {item.is_memorized ? 'MEMORIZED' : 'MARK AS MEMORIZED'}
                         </Text>
                       </TouchableOpacity>
-                      
-                      <TouchableOpacity 
+
+                      <TouchableOpacity
                         style={[styles.actionBtn, styles.deleteBtn]}
-                        onPress={() => handleDeleteSaved(item.id)}
+                        onPress={() => void handleDeleteSaved(item.id)}
                       >
                         <Trash2 size={14} color="#EF4444" />
-                        <Text style={[styles.actionBtnText, { color: '#EF4444' }]}>REMOVE</Text>
+                        <Text style={styles.deleteBtnText}>REMOVE</Text>
                       </TouchableOpacity>
                     </View>
                   </View>
@@ -526,331 +470,201 @@ export default function ProfileScreen({ route }: ProfileScreenProps) {
       ) : (
         <>
           {statusMessage && (
-        <View style={[styles.statusBanner, styles[`${statusMessage.type}Banner`]]}>
-          {statusMessage.type === 'error' ? <AlertCircle size={16} color="#ef4444" /> : <CheckCircle2 size={16} color={statusMessage.type === 'success' ? '#10B981' : '#d4af37'} />}
-          <Text style={[styles.statusText, styles[`${statusMessage.type}Text`]]}>{statusMessage.text}</Text>
-=======
-      {showConfirmationCard && (
-        <View style={styles.confirmationCard}>
-          <View style={styles.confirmationIconWrap}>
-            {confirmationState === 'checking' ? (
-              <ActivityIndicator size="large" color="#d4af37" />
-            ) : confirmationState === 'confirmed' ? (
-              <CheckCircle2 size={44} color="#10B981" />
-            ) : (
-              <AlertCircle size={44} color="#d4af37" />
+            <View style={[styles.statusBanner, bannerStyle]}>
+              {statusMessage.type === 'error' ? (
+                <AlertCircle size={16} color="#ef4444" />
+              ) : (
+                <CheckCircle2 size={16} color={statusMessage.type === 'success' ? '#10B981' : '#d4af37'} />
+              )}
+              <Text style={[styles.statusText, bannerTextStyle]}>{statusMessage.text}</Text>
+            </View>
+          )}
+
+          <Text style={styles.sectionTitle}>AI Preferences</Text>
+          <View style={styles.settingsCard}>
+            <Text style={styles.settingsLabel}>Response Length</Text>
+            <View style={styles.optionsRow}>
+              {['short', 'medium', 'long'].map((length) => {
+                const isPro = hasProAccess(profile);
+                const isDisabled = length !== 'short' && !isPro;
+                const isSelected = profile?.preferred_response_length === length;
+
+                return (
+                  <TouchableOpacity
+                    key={length}
+                    style={[
+                      styles.optionButton,
+                      isSelected && styles.optionButtonActive,
+                      isDisabled && styles.optionButtonDisabled,
+                    ]}
+                    onPress={() => !isDisabled && void updatePreference('preferred_response_length', length)}
+                    disabled={isBusy}
+                  >
+                    <Text
+                      style={[
+                        styles.optionText,
+                        isSelected && styles.optionTextActive,
+                        isDisabled && styles.optionTextDisabled,
+                      ]}
+                    >
+                      {length.toUpperCase()}
+                    </Text>
+                    {isDisabled && <Lock size={10} color="rgba(212, 175, 55, 0.3)" style={styles.optionLock} />}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+            {!hasProAccess(profile) && (
+              <Text style={styles.settingsHint}>Upgrade to Pro to unlock medium and long responses.</Text>
+            )}
+
+            <View style={styles.preferenceDivider} />
+
+            <Text style={styles.settingsLabel}>Verse of the Day</Text>
+            <View style={styles.toggleRow}>
+              <Text style={styles.toggleLabel}>Daily Notifications</Text>
+              <TouchableOpacity
+                style={[styles.toggleSwitch, profile?.verse_of_the_day_enabled && styles.toggleSwitchActive]}
+                onPress={() => void updatePreference('verse_of_the_day_enabled', !profile?.verse_of_the_day_enabled)}
+                disabled={isBusy}
+              >
+                <View style={[styles.toggleDot, profile?.verse_of_the_day_enabled && styles.toggleDotActive]} />
+              </TouchableOpacity>
+            </View>
+
+            {profile?.verse_of_the_day_enabled && (
+              <View style={styles.timePickerContainer}>
+                <Text style={styles.timeLabel}>Notification Time</Text>
+                <View style={styles.timeInputRow}>
+                  <TextInput
+                    style={styles.timeInput}
+                    value={profile?.verse_of_the_day_time || '08:00'}
+                    onChangeText={(text) => void updatePreference('verse_of_the_day_time', text)}
+                    placeholder="HH:mm"
+                    placeholderTextColor="rgba(212, 175, 55, 0.3)"
+                    maxLength={5}
+                  />
+                  <Text style={styles.timeHint}>(24h format, e.g. 08:00)</Text>
+                </View>
+              </View>
             )}
           </View>
 
-          <Text style={styles.confirmationTitle}>
-            {confirmationState === 'checking'
-              ? 'Confirming Your Subscription'
-              : confirmationState === 'confirmed'
-                ? 'Pro Access Confirmed'
-                : 'Still Syncing Your Upgrade'}
-          </Text>
+          <Text style={styles.sectionTitle}>Your Benefits</Text>
+          <View style={styles.benefitsSummary}>
+            <View style={styles.benefitItem}>
+              <CheckCircle2 size={16} color="#10B981" />
+              <Text style={styles.benefitText}>
+                {profile?.subscription_tier === 'pro' ? 'Unlimited AI Chat with David' : '3 Mood Searches / Day'}
+              </Text>
+            </View>
+            <View style={styles.benefitItem}>
+              <CheckCircle2 size={16} color="#10B981" />
+              <Text style={styles.benefitText}>
+                {profile?.subscription_tier === 'pro' ? 'Live Voice Chat with David' : 'Standard AI Reflections'}
+              </Text>
+            </View>
+            <View style={styles.benefitItem}>
+              <CheckCircle2 size={16} color="#10B981" />
+              <Text style={styles.benefitText}>
+                {profile?.subscription_tier === 'pro' ? 'Mood-based Music and Reflections' : 'Daily Verse of the Day'}
+              </Text>
+            </View>
+            {profile?.subscription_tier === 'pro' && (
+              <View style={styles.benefitItem}>
+                <CheckCircle2 size={16} color="#10B981" />
+                <Text style={styles.benefitText}>Deeper Scripture Insights & Ad-free</Text>
+              </View>
+            )}
+          </View>
 
-          <Text style={styles.confirmationText}>
-            {confirmationState === 'checking'
-              ? 'Stripe has returned successfully. We are refreshing your account and checking for your Pro tier now.'
-              : confirmationState === 'confirmed'
-                ? 'Your account is now unlocked. You can use Pro features immediately.'
-                : 'Your payment completed, but the profile update has not appeared yet. This usually resolves shortly after the webhook finishes.'}
-          </Text>
+          <View ref={pricingRef}>
+            <Text style={styles.sectionTitle}>Subscription Plans</Text>
+          </View>
 
-          {confirmationState === 'checking' && (
-            <Text style={styles.confirmationMeta}>
-              Attempt {confirmationAttempts} of {MAX_CONFIRMATION_ATTEMPTS}
-            </Text>
-          )}
-
-          {confirmationState === 'timed_out' && (
-            <TouchableOpacity
-              style={styles.refreshButton}
-              onPress={() => void confirmSubscription()}
-              disabled={isBusy}
-            >
-              <RefreshCw size={16} color="#0b1e3d" />
-              <Text style={styles.refreshButtonText}>Refresh Subscription Status</Text>
-            </TouchableOpacity>
-          )}
->>>>>>> 61252ec (Update profile subscription confirmation flow)
-        </View>
-      )}
-
-      {statusMessage && (
-        <View style={[styles.statusBanner, bannerStyle]}>
-          {statusMessage.type === 'error' ? (
-            <AlertCircle size={16} color="#ef4444" />
-          ) : (
-            <CheckCircle2 size={16} color={statusMessage.type === 'success' ? '#10B981' : '#d4af37'} />
-          )}
-          <Text style={[styles.statusText, bannerTextStyle]}>{statusMessage.text}</Text>
-        </View>
-      )}
-
-      <View style={styles.sectionHeader}>
-        <Shield size={18} color="#d4af37" />
-        <Text style={styles.sectionTitle}>AI Preferences</Text>
-      </View>
-      <View style={styles.settingsCard}>
-        <Text style={styles.settingsLabel}>Response Length</Text>
-        <View style={styles.optionsRow}>
-          {['short', 'medium', 'long'].map((length) => {
-            const isLocked = length !== 'short' && !hasProAccess(profile);
-            const isSelected = profile?.preferred_response_length === length;
+          {Object.values(PLANS).map((plan) => {
+            const currentTier = profile?.subscription_tier || 'free';
+            const isOwner = profile?.email === OWNER_EMAIL;
+            const isCurrentPlan = currentTier === plan.id;
+            const tierOrder = ['free', 'pro', 'owner'];
+            const currentTierIndex = tierOrder.indexOf(isOwner ? 'owner' : currentTier);
+            const planTierIndex = tierOrder.indexOf(plan.id);
+            const isIncluded = currentTierIndex >= planTierIndex;
+            const canUpgrade = !isIncluded && plan.id !== 'free';
 
             return (
-              <TouchableOpacity
-                key={length}
+              <View
+                key={plan.id}
                 style={[
-                  styles.optionButton,
-                  isSelected && styles.optionButtonActive,
-                  isLocked && styles.optionButtonDisabled,
+                  styles.planCard,
+                  plan.id === 'pro' && styles.proCard,
+                  isCurrentPlan && styles.currentPlanCard,
                 ]}
-                onPress={() => !isLocked && updatePreference('preferred_response_length', length)}
-                disabled={isBusy}
               >
-                <Text
-                  style={[
-                    styles.optionText,
-                    isSelected && styles.optionTextActive,
-                    isLocked && styles.optionTextDisabled,
-                  ]}
-                >
-                  {length.toUpperCase()}
-                </Text>
-                {isLocked && <Lock size={10} color="rgba(212, 175, 55, 0.3)" style={{ marginTop: 2 }} />}
-              </TouchableOpacity>
+                {plan.id === 'pro' && (
+                  <View style={styles.proBadge}>
+                    <Star size={10} color="#0b1e3d" fill="#0b1e3d" />
+                    <Text style={styles.proBadgeText}>BEST VALUE</Text>
+                  </View>
+                )}
+
+                {isCurrentPlan && (
+                  <View style={styles.currentBadge}>
+                    <CheckCircle2 size={10} color="#fff" />
+                    <Text style={styles.currentBadgeText}>ACTIVE</Text>
+                  </View>
+                )}
+
+                <View style={styles.planHeader}>
+                  <View>
+                    <Text style={[styles.planName, plan.id === 'pro' && styles.proPlanText]}>{plan.name}</Text>
+                    <Text style={[styles.planInterval, plan.id === 'pro' && styles.proPlanSubtext]}>
+                      {plan.id === 'free' ? 'Basic Access' : 'Full Experience'}
+                    </Text>
+                  </View>
+                  <View style={styles.priceContainer}>
+                    <Text style={[styles.planPrice, plan.id === 'pro' && styles.proPlanText]}>{plan.price}</Text>
+                    <Text style={[styles.planIntervalLabel, plan.id === 'pro' && styles.proPlanSubtext]}>/{plan.interval}</Text>
+                  </View>
+                </View>
+
+                <View style={styles.featureList}>
+                  {plan.features.map((feature, idx) => (
+                    <View key={`${plan.id}-${idx}`} style={styles.featureItem}>
+                      <CheckCircle2 color={plan.id === 'pro' ? '#fff' : '#10B981'} size={14} />
+                      <Text style={[styles.featureText, plan.id === 'pro' && styles.proPlanText]}>{feature}</Text>
+                    </View>
+                  ))}
+                </View>
+
+                {canUpgrade ? (
+                  <TouchableOpacity
+                    style={[styles.planButton, plan.id === 'pro' && styles.proButton]}
+                    onPress={() => void handleUpgrade(plan.id)}
+                    disabled={isBusy}
+                  >
+                    {loading ? (
+                      <ActivityIndicator size="small" color={plan.id === 'pro' ? '#fff' : '#d4af37'} />
+                    ) : (
+                      <Text style={[styles.planButtonText, plan.id === 'pro' && styles.proButtonText]}>
+                        Upgrade to {plan.name.split(' ')[0]}
+                      </Text>
+                    )}
+                  </TouchableOpacity>
+                ) : (
+                  <View style={[styles.planButton, styles.activePlanButton, plan.id === 'pro' && styles.activeProButton]}>
+                    <Text style={[styles.planButtonText, plan.id === 'pro' && styles.activeProButtonText]}>
+                      {isCurrentPlan ? 'Current Plan' : 'Included'}
+                    </Text>
+                  </View>
+                )}
+              </View>
             );
           })}
-        </View>
-        {!hasProAccess(profile) && (
-          <Text style={styles.settingsHint}>Upgrade to Pro to unlock medium and long responses.</Text>
-        )}
+        </>
+      )}
 
-        <View style={styles.divider} />
-
-        <Text style={styles.settingsLabel}>Verse of the Day</Text>
-        <View style={styles.toggleRow}>
-          <Text style={styles.toggleLabel}>Daily Notifications</Text>
-          <TouchableOpacity
-            style={[styles.toggleSwitch, profile?.verse_of_the_day_enabled && styles.toggleSwitchActive]}
-            onPress={() => updatePreference('verse_of_the_day_enabled', !profile?.verse_of_the_day_enabled)}
-            disabled={isBusy}
-          >
-            <View style={[styles.toggleDot, profile?.verse_of_the_day_enabled && styles.toggleDotActive]} />
-          </TouchableOpacity>
-        </View>
-
-        {profile?.verse_of_the_day_enabled && (
-          <View style={styles.timePickerContainer}>
-            <Text style={styles.timeLabel}>Notification Time</Text>
-            <View style={styles.timeInputRow}>
-              <TextInput
-                style={styles.timeInput}
-                value={profile?.verse_of_the_day_time || '08:00'}
-                onChangeText={(text) => updatePreference('verse_of_the_day_time', text)}
-                placeholder="HH:mm"
-                placeholderTextColor="rgba(212, 175, 55, 0.3)"
-                maxLength={5}
-              />
-              <Text style={styles.timeHint}>(24h format, for example 08:00)</Text>
-            </View>
-          </View>
-        )}
-      </View>
-
-<<<<<<< HEAD
-      <Text style={[styles.sectionTitle, { paddingLeft: 44 }]}>Your Benefits</Text>
-      <View style={[styles.benefitsSummary, { paddingLeft: 16 }]}>
-        <View style={styles.benefitItem}>
-          <CheckCircle2 size={16} color="#10B981" />
-          <Text style={styles.benefitText}>
-            {profile?.subscription_tier === 'pro' ? 'Unlimited AI Chat with David' : '3 Mood Searches / Day'}
-=======
-      <View style={styles.sectionHeader}>
-        <Shield size={18} color="#10B981" />
-        <Text style={styles.sectionTitle}>Your Benefits</Text>
-      </View>
-      <View style={styles.benefitsSummary}>
-        <View style={styles.benefitItem}>
-          <CheckCircle2 size={16} color="#10B981" />
-          <Text style={styles.benefitText}>
-            {profile?.subscription_tier === 'pro'
-              ? 'Unlimited AI Conversations'
-              : profile?.subscription_tier === 'plus'
-                ? 'Unlimited Mood Search'
-                : '3 Mood Searches / Day'}
->>>>>>> 61252ec (Update profile subscription confirmation flow)
-          </Text>
-        </View>
-        <View style={styles.benefitItem}>
-          <CheckCircle2 size={16} color="#10B981" />
-          <Text style={styles.benefitText}>
-<<<<<<< HEAD
-            {profile?.subscription_tier === 'pro' ? 'Live Voice Chat with David' : 'Standard AI Reflections'}
-          </Text>
-        </View>
-        <View style={styles.benefitItem}>
-          <CheckCircle2 size={16} color="#10B981" />
-          <Text style={styles.benefitText}>
-            {profile?.subscription_tier === 'pro' ? 'Mood-based Music and Reflections' : 'Daily Verse of the Day'}
-=======
-            {profile?.preferred_response_length === 'long'
-              ? 'Comprehensive AI Reflections'
-              : profile?.preferred_response_length === 'medium'
-                ? 'Standard AI Reflections'
-                : 'Concise AI Reflections'}
->>>>>>> 61252ec (Update profile subscription confirmation flow)
-          </Text>
-        </View>
-        {profile?.subscription_tier === 'pro' && (
-          <View style={styles.benefitItem}>
-            <CheckCircle2 size={16} color="#10B981" />
-            <Text style={styles.benefitText}>Deeper Scripture Insights & Ad-free</Text>
-          </View>
-        )}
-      </View>
-
-<<<<<<< HEAD
-      <Text style={styles.sectionTitle} onLayout={(e) => {
-        // Fallback for measurement if needed
-      }} ref={pricingRef}>Subscription Plans</Text>
-      
-=======
-      <View style={styles.sectionHeader}>
-        <CreditCard size={18} color="#d4af37" />
-        <Text style={styles.sectionTitle}>Subscription Plans</Text>
-      </View>
->>>>>>> 61252ec (Update profile subscription confirmation flow)
-      {Object.values(PLANS).map((plan) => {
-        const currentTier = profile?.subscription_tier || 'free';
-        const isOwner = profile?.email === OWNER_EMAIL;
-        const isCurrentPlan = currentTier === plan.id;
-<<<<<<< HEAD
-        
-        // Tier hierarchy: free < pro < owner
-        const tierOrder = ['free', 'pro', 'owner'];
-        const currentTierIndex = tierOrder.indexOf(isOwner ? 'owner' : currentTier);
-        const planTierIndex = tierOrder.indexOf(plan.id);
-        
-=======
-        const tierOrder = ['free', 'plus', 'pro', 'owner'];
-        const currentTierIndex = tierOrder.indexOf(isOwner ? 'owner' : currentTier);
-        const planTierIndex = tierOrder.indexOf(plan.id);
->>>>>>> 61252ec (Update profile subscription confirmation flow)
-        const isIncluded = currentTierIndex >= planTierIndex;
-        const canUpgrade = !isIncluded && plan.id !== 'free';
-
-        return (
-<<<<<<< HEAD
-          <View key={plan.id} style={[
-            styles.planCard, 
-            plan.id === 'pro' && styles.proCard,
-            isCurrentPlan && styles.currentPlanCard
-          ]}>
-=======
-          <View
-            key={plan.id}
-            style={[
-              styles.planCard,
-              plan.id === 'pro' && styles.proCard,
-              isCurrentPlan && styles.currentPlanCard,
-            ]}
-          >
->>>>>>> 61252ec (Update profile subscription confirmation flow)
-            {plan.id === 'pro' && (
-              <View style={styles.proBadge}>
-                <Star size={10} color="#0b1e3d" fill="#0b1e3d" />
-                <Text style={styles.proBadgeText}>BEST VALUE</Text>
-              </View>
-            )}
-            
-            {isCurrentPlan && (
-              <View style={styles.currentBadge}>
-                <CheckCircle2 size={10} color="#fff" />
-                <Text style={styles.currentBadgeText}>ACTIVE</Text>
-              </View>
-            )}
-
-            <View style={styles.planHeader}>
-              <View>
-                <Text style={[styles.planName, plan.id === 'pro' && styles.proText]}>{plan.name}</Text>
-                <Text style={[styles.planSubtext, plan.id === 'pro' && styles.proMutedText]}>
-                  {plan.id === 'free' ? 'Basic Access' : 'Full Experience'}
-                </Text>
-              </View>
-              <View style={styles.priceContainer}>
-                <Text style={[styles.planPrice, plan.id === 'pro' && styles.proText]}>{plan.price}</Text>
-                <Text style={[styles.planInterval, plan.id === 'pro' && styles.proMutedText]}>/{plan.interval}</Text>
-              </View>
-            </View>
-
-            <View style={styles.featureList}>
-              {plan.features.map((feature) => (
-                <View key={`${plan.id}-${feature}`} style={styles.featureItem}>
-                  <CheckCircle2 color={plan.id === 'pro' ? '#fff' : '#10B981'} size={14} />
-                  <Text style={[styles.featureText, plan.id === 'pro' && styles.proText]}>{feature}</Text>
-                </View>
-              ))}
-            </View>
-
-            {canUpgrade ? (
-<<<<<<< HEAD
-              <TouchableOpacity 
-                style={[
-                  styles.planButton, 
-                  plan.id === 'pro' && styles.proButton
-                ]} 
-=======
-              <TouchableOpacity
-                style={[styles.planButton, plan.id === 'pro' && styles.proButton]}
->>>>>>> 61252ec (Update profile subscription confirmation flow)
-                onPress={() => handleUpgrade(plan.id)}
-                disabled={isBusy}
-              >
-                {loading ? (
-                  <ActivityIndicator size="small" color={plan.id === 'pro' ? '#0b1e3d' : '#d4af37'} />
-                ) : (
-<<<<<<< HEAD
-                  <Text style={[
-                    styles.planButtonText, 
-                    plan.id === 'pro' && { color: '#0b1e3d' }
-                  ]}>
-=======
-                  <Text style={[styles.planButtonText, plan.id === 'pro' && styles.proButtonText]}>
->>>>>>> 61252ec (Update profile subscription confirmation flow)
-                    Upgrade to {plan.name.split(' ')[0]}
-                  </Text>
-                )}
-              </TouchableOpacity>
-            ) : (
-<<<<<<< HEAD
-              <View style={[
-                styles.planButton, 
-                styles.activePlanButton,
-                plan.id === 'pro' && styles.activeProButton
-              ]}>
-                <Text style={[
-                  styles.planButtonText,
-                  plan.id === 'pro' && { color: '#fff' }
-                ]}>
-=======
-              <View style={[styles.planButton, styles.activePlanButton, plan.id === 'pro' && styles.activeProButton]}>
-                <Text style={[styles.planButtonText, plan.id === 'pro' && styles.proText]}>
->>>>>>> 61252ec (Update profile subscription confirmation flow)
-                  {isCurrentPlan ? 'Current Plan' : 'Included'}
-                </Text>
-              </View>
-            )}
-          </View>
-        );
-      })}
-    </>
-  )}
-
-  <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+      <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
         <LogOut color="#EF4444" size={20} />
         <Text style={styles.logoutText}>Logout</Text>
       </TouchableOpacity>
@@ -870,12 +684,12 @@ const styles = StyleSheet.create({
   },
   header: {
     alignItems: 'center',
-    marginBottom: 24,
+    marginBottom: 30,
     backgroundColor: '#0f2a52',
-    padding: 24,
+    padding: 25,
     borderRadius: 24,
     borderWidth: 1,
-    borderColor: 'rgba(212, 175, 55, 0.3)',
+    borderColor: '#d4af37',
   },
   activatingLoader: {
     flexDirection: 'row',
@@ -896,453 +710,48 @@ const styles = StyleSheet.create({
     letterSpacing: 1.5,
   },
   avatar: {
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+    width: 50,
+    height: 50,
+    borderRadius: 25,
     backgroundColor: '#0b1e3d',
     justifyContent: 'center',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 10,
     borderWidth: 1,
     borderColor: 'rgba(212, 175, 55, 0.3)',
   },
   avatarText: {
-    fontSize: 22,
-    fontWeight: '700',
+    fontSize: 20,
+    fontWeight: '600',
     color: '#d4af37',
+    fontFamily: 'Playfair Display',
   },
   email: {
     fontSize: 14,
     fontWeight: '500',
     color: '#ffffff',
-    opacity: 0.85,
+    fontFamily: 'Playfair Display',
+    opacity: 0.8,
   },
   tierBadge: {
-    marginTop: 12,
+    backgroundColor: 'rgba(212, 175, 55, 0.1)',
     paddingHorizontal: 12,
     paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: 'rgba(212, 175, 55, 0.1)',
+    borderRadius: 20,
+    marginTop: 10,
     borderWidth: 1,
     borderColor: 'rgba(212, 175, 55, 0.3)',
   },
   tierText: {
     fontSize: 10,
-    fontWeight: '700',
+    fontWeight: 'bold',
     color: '#d4af37',
     textTransform: 'uppercase',
     letterSpacing: 1,
-  },
-  confirmationCard: {
-    backgroundColor: 'rgba(15, 42, 82, 0.82)',
-    borderRadius: 24,
-    padding: 24,
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: 'rgba(212, 175, 55, 0.28)',
-    alignItems: 'center',
-  },
-  confirmationIconWrap: {
-    marginBottom: 16,
-    minHeight: 48,
-    justifyContent: 'center',
-  },
-  confirmationTitle: {
-    fontSize: 20,
-    fontWeight: '700',
-    color: '#d4af37',
-    textAlign: 'center',
-    textTransform: 'uppercase',
-    letterSpacing: 1.5,
-    marginBottom: 10,
-  },
-  confirmationText: {
-    fontSize: 14,
-    color: 'rgba(255, 255, 255, 0.82)',
-    textAlign: 'center',
-    lineHeight: 22,
-  },
-  confirmationMeta: {
-    marginTop: 14,
-    fontSize: 12,
-    color: '#f5d77a',
-    fontWeight: '700',
-    letterSpacing: 1,
-    textTransform: 'uppercase',
-  },
-  refreshButton: {
-    marginTop: 18,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: '#d4af37',
-    borderRadius: 14,
-    paddingHorizontal: 18,
-    paddingVertical: 12,
-  },
-  refreshButtonText: {
-    color: '#0b1e3d',
-    fontSize: 13,
-    fontWeight: '700',
-    textTransform: 'uppercase',
-    letterSpacing: 0.8,
-  },
-  statusBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 12,
-    borderRadius: 12,
-    marginBottom: 20,
-    borderWidth: 1,
-  },
-  successBanner: {
-    backgroundColor: 'rgba(16, 185, 129, 0.1)',
-    borderColor: 'rgba(16, 185, 129, 0.3)',
-  },
-  errorBanner: {
-    backgroundColor: 'rgba(239, 68, 68, 0.1)',
-    borderColor: 'rgba(239, 68, 68, 0.3)',
-  },
-  infoBanner: {
-    backgroundColor: 'rgba(212, 175, 55, 0.1)',
-    borderColor: 'rgba(212, 175, 55, 0.3)',
-  },
-  statusText: {
-    flex: 1,
-    marginLeft: 10,
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  successText: {
-    color: '#10B981',
-  },
-  errorText: {
-    color: '#ef4444',
-  },
-  infoText: {
-    color: '#d4af37',
-  },
-  sectionHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    marginBottom: 16,
-    marginTop: 6,
-  },
-  sectionTitle: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#f5d77a',
-    textTransform: 'uppercase',
-    letterSpacing: 2,
-  },
-  settingsCard: {
-    backgroundColor: '#0f2a52',
-    borderRadius: 24,
-    padding: 24,
-    marginBottom: 28,
-    borderWidth: 1,
-    borderColor: 'rgba(212, 175, 55, 0.2)',
-  },
-  settingsLabel: {
-    fontSize: 14,
-    color: '#ffffff',
-    textAlign: 'center',
-    marginBottom: 14,
-  },
-  optionsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    gap: 10,
-  },
-  optionButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(212, 175, 55, 0.05)',
-    paddingVertical: 12,
-    borderRadius: 12,
-    borderWidth: 1,
-    borderColor: 'rgba(212, 175, 55, 0.2)',
-  },
-  optionButtonActive: {
-    backgroundColor: 'rgba(212, 175, 55, 0.18)',
-    borderColor: '#d4af37',
-  },
-  optionButtonDisabled: {
-    opacity: 0.5,
-  },
-  optionText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: 'rgba(212, 175, 55, 0.6)',
-    letterSpacing: 1,
-  },
-  optionTextActive: {
-    color: '#d4af37',
-  },
-  optionTextDisabled: {
-    color: 'rgba(212, 175, 55, 0.35)',
-  },
-  settingsHint: {
-    marginTop: 14,
-    fontSize: 11,
-    color: 'rgba(212, 175, 55, 0.55)',
-    textAlign: 'center',
-    fontStyle: 'italic',
-  },
-  divider: {
-    height: 1,
-    backgroundColor: 'rgba(212, 175, 55, 0.12)',
-    marginVertical: 20,
-  },
-  toggleRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  toggleLabel: {
-    fontSize: 14,
-    color: '#ffffff',
-  },
-  toggleSwitch: {
-    width: 44,
-    height: 24,
-    borderRadius: 12,
-    padding: 2,
-    backgroundColor: 'rgba(212, 175, 55, 0.1)',
-    borderWidth: 1,
-    borderColor: 'rgba(212, 175, 55, 0.25)',
-  },
-  toggleSwitchActive: {
-    backgroundColor: 'rgba(212, 175, 55, 0.3)',
-    borderColor: '#d4af37',
-  },
-  toggleDot: {
-    width: 18,
-    height: 18,
-    borderRadius: 9,
-    backgroundColor: 'rgba(212, 175, 55, 0.45)',
-  },
-  toggleDotActive: {
-    backgroundColor: '#d4af37',
-    transform: [{ translateX: 20 }],
-  },
-  timePickerContainer: {
-    marginTop: 20,
-    paddingTop: 20,
-    borderTopWidth: 1,
-    borderTopColor: 'rgba(212, 175, 55, 0.12)',
-  },
-  timeLabel: {
-    fontSize: 12,
-    color: '#f5d77a',
-    textAlign: 'center',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    marginBottom: 10,
-  },
-  timeInputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-  },
-  timeInput: {
-    width: 90,
-    backgroundColor: 'rgba(212, 175, 55, 0.05)',
-    borderWidth: 1,
-    borderColor: 'rgba(212, 175, 55, 0.3)',
-    borderRadius: 8,
-    paddingHorizontal: 15,
-    paddingVertical: 8,
-    color: '#d4af37',
-    fontSize: 16,
-    fontWeight: '700',
-    textAlign: 'center',
-  },
-  timeHint: {
-    fontSize: 10,
-    color: 'rgba(212, 175, 55, 0.45)',
-    fontStyle: 'italic',
-  },
-  benefitsSummary: {
-    backgroundColor: '#0f2a52',
-    borderRadius: 24,
-    padding: 20,
-    marginBottom: 28,
-    borderWidth: 1,
-    borderColor: 'rgba(16, 185, 129, 0.25)',
-  },
-  benefitItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginBottom: 10,
-  },
-  benefitText: {
-    flex: 1,
-    fontSize: 13,
-    color: '#ffffff',
-    opacity: 0.9,
-  },
-  planCard: {
-    backgroundColor: '#0f2a52',
-    borderRadius: 24,
-    padding: 24,
-    marginBottom: 18,
-    borderWidth: 1,
-    borderColor: 'rgba(212, 175, 55, 0.2)',
-    overflow: 'hidden',
-  },
-  proCard: {
-    backgroundColor: '#0b1e3d',
-    borderColor: '#d4af37',
-  },
-  currentPlanCard: {
-    borderColor: '#10B981',
-    backgroundColor: 'rgba(16, 185, 129, 0.05)',
-  },
-  proBadge: {
-    position: 'absolute',
-    top: 12,
-    right: -30,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#d4af37',
-    paddingHorizontal: 40,
-    paddingVertical: 4,
-    transform: [{ rotate: '45deg' }],
-  },
-  proBadgeText: {
-    fontSize: 8,
-    fontWeight: '700',
-    color: '#0b1e3d',
-    textTransform: 'uppercase',
-  },
-  currentBadge: {
-    position: 'absolute',
-    top: 12,
-    left: -30,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#10B981',
-    paddingHorizontal: 40,
-    paddingVertical: 4,
-    transform: [{ rotate: '-45deg' }],
-  },
-  currentBadgeText: {
-    fontSize: 8,
-    fontWeight: '700',
-    color: '#fff',
-    textTransform: 'uppercase',
-  },
-  planHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    marginBottom: 18,
-  },
-  planName: {
-    fontSize: 18,
-    fontWeight: '700',
-    color: '#ffffff',
-  },
-  planSubtext: {
-    marginTop: 2,
-    fontSize: 11,
-    color: 'rgba(212, 175, 55, 0.65)',
-  },
-  priceContainer: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-  },
-  planPrice: {
-    fontSize: 24,
-    fontWeight: '700',
-    color: '#ffffff',
-  },
-  planInterval: {
-    fontSize: 12,
-    color: 'rgba(212, 175, 55, 0.65)',
-  },
-  featureList: {
-    gap: 10,
-    marginBottom: 20,
-  },
-  featureItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 10,
-  },
-  featureText: {
-    flex: 1,
-    fontSize: 13,
-    color: '#ffffff',
-    opacity: 0.92,
-  },
-  planButton: {
-    borderRadius: 14,
-    paddingVertical: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(212, 175, 55, 0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(212, 175, 55, 0.3)',
-  },
-  proButton: {
-    backgroundColor: '#d4af37',
-    borderColor: '#d4af37',
-  },
-  activePlanButton: {
-    backgroundColor: 'rgba(16, 185, 129, 0.08)',
-    borderColor: 'rgba(16, 185, 129, 0.3)',
-  },
-  activeProButton: {
-    backgroundColor: 'rgba(212, 175, 55, 0.12)',
-    borderColor: 'rgba(212, 175, 55, 0.35)',
-  },
-  planButtonText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#d4af37',
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  proButtonText: {
-    color: '#0b1e3d',
-  },
-  proText: {
-    color: '#ffffff',
-  },
-  proMutedText: {
-    color: 'rgba(255, 255, 255, 0.68)',
-  },
-  logoutButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 10,
-    marginTop: 10,
-    paddingVertical: 14,
-    borderRadius: 16,
-    backgroundColor: 'rgba(239, 68, 68, 0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.25)',
-  },
-  logoutText: {
-    color: '#EF4444',
-    fontSize: 14,
-    fontWeight: '700',
   },
   tabContainer: {
     flexDirection: 'row',
-    marginBottom: 30,
+    marginBottom: 24,
     backgroundColor: 'rgba(212, 175, 55, 0.05)',
     borderRadius: 20,
     padding: 4,
@@ -1369,6 +778,65 @@ const styles = StyleSheet.create({
   tabTextActive: {
     color: '#d4af37',
   },
+  savedTabInner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  confirmationCard: {
+    backgroundColor: 'rgba(15, 42, 82, 0.82)',
+    borderRadius: 24,
+    padding: 22,
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: 'rgba(212, 175, 55, 0.25)',
+    alignItems: 'center',
+  },
+  confirmationIconWrap: {
+    marginBottom: 14,
+    minHeight: 46,
+    justifyContent: 'center',
+  },
+  confirmationTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: '#d4af37',
+    textTransform: 'uppercase',
+    letterSpacing: 1.5,
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  confirmationText: {
+    fontSize: 14,
+    color: 'rgba(255, 255, 255, 0.82)',
+    textAlign: 'center',
+    lineHeight: 22,
+  },
+  confirmationMeta: {
+    marginTop: 14,
+    fontSize: 11,
+    color: '#f5d77a',
+    fontWeight: 'bold',
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  confirmationActionButton: {
+    marginTop: 18,
+    backgroundColor: '#d4af37',
+    borderRadius: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  confirmationActionText: {
+    color: '#0b1e3d',
+    fontSize: 12,
+    fontWeight: 'bold',
+    textTransform: 'uppercase',
+    letterSpacing: 0.8,
+  },
   savedSection: {
     marginBottom: 30,
   },
@@ -1379,6 +847,14 @@ const styles = StyleSheet.create({
     marginBottom: 20,
     paddingHorizontal: 10,
   },
+  savedRefreshText: {
+    fontSize: 10,
+    color: '#d4af37',
+    fontWeight: 'bold',
+  },
+  savedLoader: {
+    marginTop: 40,
+  },
   emptySaved: {
     alignItems: 'center',
     padding: 40,
@@ -1387,6 +863,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderStyle: 'dashed',
     borderColor: 'rgba(212, 175, 55, 0.2)',
+  },
+  emptySavedIcon: {
+    marginBottom: 15,
   },
   emptySavedText: {
     color: '#d4af37',
@@ -1426,6 +905,13 @@ const styles = StyleSheet.create({
     width: 6,
     height: 6,
     borderRadius: 3,
+    backgroundColor: 'rgba(212, 175, 55, 0.3)',
+  },
+  memorizedDotActive: {
+    backgroundColor: '#10B981',
+  },
+  savedCardTitleContent: {
+    flex: 1,
   },
   savedReference: {
     fontSize: 14,
@@ -1498,11 +984,387 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     color: 'rgba(212, 175, 55, 0.8)',
   },
+  actionBtnTextInverted: {
+    color: '#fff',
+  },
   memorizedBtn: {
     backgroundColor: '#10B981',
     borderColor: '#10B981',
   },
   deleteBtn: {
     borderColor: 'rgba(239, 68, 68, 0.2)',
+  },
+  deleteBtnText: {
+    fontSize: 9,
+    fontWeight: 'bold',
+    letterSpacing: 0.5,
+    color: '#EF4444',
+  },
+  statusBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 12,
+    marginBottom: 20,
+    borderWidth: 1,
+  },
+  successBanner: {
+    backgroundColor: 'rgba(16, 185, 129, 0.1)',
+    borderColor: 'rgba(16, 185, 129, 0.3)',
+  },
+  errorBanner: {
+    backgroundColor: 'rgba(239, 68, 68, 0.1)',
+    borderColor: 'rgba(239, 68, 68, 0.3)',
+  },
+  infoBanner: {
+    backgroundColor: 'rgba(212, 175, 55, 0.1)',
+    borderColor: 'rgba(212, 175, 55, 0.3)',
+  },
+  statusText: {
+    fontSize: 12,
+    marginLeft: 10,
+    fontWeight: '500',
+    flex: 1,
+  },
+  successText: {
+    color: '#10B981',
+  },
+  errorText: {
+    color: '#ef4444',
+  },
+  infoText: {
+    color: '#d4af37',
+  },
+  sectionTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: '#f5d77a',
+    marginBottom: 20,
+    textTransform: 'uppercase',
+    letterSpacing: 2,
+    textAlign: 'center',
+    marginTop: 10,
+  },
+  settingsCard: {
+    backgroundColor: '#0f2a52',
+    borderRadius: 24,
+    padding: 24,
+    marginBottom: 30,
+    borderWidth: 1,
+    borderColor: 'rgba(212, 175, 55, 0.2)',
+  },
+  settingsLabel: {
+    fontSize: 14,
+    color: '#ffffff',
+    fontFamily: 'Playfair Display',
+    marginBottom: 15,
+    textAlign: 'center',
+  },
+  optionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  optionButton: {
+    flex: 1,
+    backgroundColor: 'rgba(212, 175, 55, 0.05)',
+    paddingVertical: 12,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(212, 175, 55, 0.2)',
+    flexDirection: 'row',
+    gap: 4,
+  },
+  optionButtonActive: {
+    backgroundColor: 'rgba(212, 175, 55, 0.2)',
+    borderColor: '#d4af37',
+  },
+  optionButtonDisabled: {
+    opacity: 0.5,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+  },
+  optionText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: 'rgba(212, 175, 55, 0.6)',
+    letterSpacing: 1,
+  },
+  optionTextActive: {
+    color: '#d4af37',
+  },
+  optionTextDisabled: {
+    color: 'rgba(212, 175, 55, 0.3)',
+  },
+  optionLock: {
+    marginTop: 2,
+  },
+  settingsHint: {
+    fontSize: 11,
+    color: 'rgba(212, 175, 55, 0.5)',
+    textAlign: 'center',
+    marginTop: 15,
+    fontStyle: 'italic',
+    fontFamily: 'Playfair Display',
+  },
+  preferenceDivider: {
+    height: 1,
+    backgroundColor: 'rgba(212, 175, 55, 0.1)',
+    marginVertical: 20,
+  },
+  benefitsSummary: {
+    backgroundColor: '#0f2a52',
+    borderRadius: 24,
+    padding: 20,
+    marginBottom: 30,
+    borderWidth: 1,
+    borderColor: 'rgba(16, 185, 129, 0.3)',
+  },
+  benefitItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+    gap: 12,
+  },
+  benefitText: {
+    fontSize: 13,
+    color: '#ffffff',
+    fontFamily: 'Playfair Display',
+    opacity: 0.9,
+  },
+  toggleRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 10,
+  },
+  toggleLabel: {
+    fontSize: 14,
+    color: '#ffffff',
+    fontFamily: 'Playfair Display',
+  },
+  toggleSwitch: {
+    width: 44,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: 'rgba(212, 175, 55, 0.1)',
+    padding: 2,
+    borderWidth: 1,
+    borderColor: 'rgba(212, 175, 55, 0.3)',
+  },
+  toggleSwitchActive: {
+    backgroundColor: 'rgba(212, 175, 55, 0.3)',
+    borderColor: '#d4af37',
+  },
+  toggleDot: {
+    width: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: 'rgba(212, 175, 55, 0.4)',
+  },
+  toggleDotActive: {
+    backgroundColor: '#d4af37',
+    transform: [{ translateX: 20 }],
+  },
+  timePickerContainer: {
+    marginTop: 20,
+    paddingTop: 20,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(212, 175, 55, 0.1)',
+  },
+  timeLabel: {
+    fontSize: 12,
+    color: '#f5d77a',
+    marginBottom: 10,
+    textAlign: 'center',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  timeInputRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 10,
+  },
+  timeInput: {
+    backgroundColor: 'rgba(212, 175, 55, 0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(212, 175, 55, 0.3)',
+    borderRadius: 8,
+    paddingHorizontal: 15,
+    paddingVertical: 8,
+    color: '#d4af37',
+    fontSize: 16,
+    fontWeight: 'bold',
+    textAlign: 'center',
+    width: 80,
+  },
+  timeHint: {
+    fontSize: 10,
+    color: 'rgba(212, 175, 55, 0.4)',
+    fontStyle: 'italic',
+  },
+  planCard: {
+    backgroundColor: '#0f2a52',
+    borderRadius: 24,
+    padding: 24,
+    marginBottom: 20,
+    borderWidth: 1,
+    borderColor: 'rgba(212, 175, 55, 0.2)',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 5,
+    overflow: 'hidden',
+  },
+  proCard: {
+    borderColor: '#d4af37',
+    backgroundColor: '#0b1e3d',
+  },
+  currentPlanCard: {
+    borderColor: '#10B981',
+    backgroundColor: 'rgba(16, 185, 129, 0.05)',
+  },
+  proBadge: {
+    position: 'absolute',
+    top: 12,
+    right: -30,
+    backgroundColor: '#d4af37',
+    paddingHorizontal: 40,
+    paddingVertical: 4,
+    transform: [{ rotate: '45deg' }],
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  proBadgeText: {
+    fontSize: 8,
+    fontWeight: 'bold',
+    color: '#0b1e3d',
+    textTransform: 'uppercase',
+  },
+  currentBadge: {
+    position: 'absolute',
+    top: 12,
+    left: -30,
+    backgroundColor: '#10B981',
+    paddingHorizontal: 40,
+    paddingVertical: 4,
+    transform: [{ rotate: '-45deg' }],
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+  },
+  currentBadgeText: {
+    fontSize: 8,
+    fontWeight: 'bold',
+    color: '#fff',
+    textTransform: 'uppercase',
+  },
+  planHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    marginBottom: 20,
+  },
+  planName: {
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#ffffff',
+    fontFamily: 'Playfair Display',
+  },
+  planInterval: {
+    fontSize: 11,
+    color: 'rgba(212, 175, 55, 0.6)',
+    fontFamily: 'Playfair Display',
+    marginTop: 2,
+  },
+  priceContainer: {
+    flexDirection: 'row',
+    alignItems: 'baseline',
+  },
+  planPrice: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: '#d4af37',
+    fontFamily: 'Playfair Display',
+  },
+  planIntervalLabel: {
+    fontSize: 12,
+    color: 'rgba(212, 175, 55, 0.6)',
+    fontFamily: 'Playfair Display',
+  },
+  featureList: {
+    marginBottom: 25,
+  },
+  featureItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 10,
+  },
+  featureText: {
+    fontSize: 13,
+    color: '#f5d77a',
+    marginLeft: 10,
+    fontFamily: 'Playfair Display',
+    opacity: 0.9,
+  },
+  planButton: {
+    backgroundColor: '#d4af37',
+    padding: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    minHeight: 48,
+    justifyContent: 'center',
+  },
+  activePlanButton: {
+    backgroundColor: 'rgba(212, 175, 55, 0.1)',
+    borderWidth: 1,
+    borderColor: '#d4af37',
+  },
+  planButtonText: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: '#0b1e3d',
+    textTransform: 'uppercase',
+    letterSpacing: 1,
+  },
+  proButton: {
+    backgroundColor: '#fff',
+  },
+  proButtonText: {
+    color: '#0b1e3d',
+  },
+  activeProButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.1)',
+    borderColor: '#fff',
+    borderWidth: 1,
+  },
+  activeProButtonText: {
+    color: '#fff',
+  },
+  proPlanText: {
+    color: '#fff',
+  },
+  proPlanSubtext: {
+    color: 'rgba(255,255,255,0.6)',
+  },
+  logoutButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 20,
+    padding: 15,
+  },
+  logoutText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#ef4444',
+    marginLeft: 10,
+    textTransform: 'uppercase',
+    letterSpacing: 2,
+    fontFamily: 'Playfair Display',
   },
 });
