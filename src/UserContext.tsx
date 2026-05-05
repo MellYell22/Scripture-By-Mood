@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, ReactNode, useCallback, useRef } from 'react';
 import { supabase, isSupabaseConfigured } from './services/supabase';
 import { Profile } from './types';
 
@@ -6,7 +6,11 @@ interface UserContextType {
   session: any;
   profile: Profile | null;
   loading: boolean;
+<<<<<<< HEAD
   refreshProfile: (showLoading?: boolean) => Promise<void>;
+=======
+  refreshProfile: (showLoading?: boolean) => Promise<Profile | null>;
+>>>>>>> 61252ec (Update profile subscription confirmation flow)
   signOut: () => Promise<void>;
 }
 
@@ -16,6 +20,18 @@ export function UserProvider({ children }: { children: ReactNode }) {
   const [session, setSession] = useState<any>(null);
   const [profile, setProfile] = useState<Profile | null>(null);
   const [loading, setLoading] = useState(true);
+  const latestProfileRequestRef = useRef(0);
+
+  // Safety net: ensure loading screen eventually disappears
+  useEffect(() => {
+    if (loading) {
+      const timer = setTimeout(() => {
+        console.warn('[UserContext] Loading safety timeout reached (12s). Forcing app to initialize.');
+        setLoading(false);
+      }, 12000);
+      return () => clearTimeout(timer);
+    }
+  }, [loading]);
 
   // Safety net: ensure loading screen eventually disappears
   useEffect(() => {
@@ -80,7 +96,14 @@ export function UserProvider({ children }: { children: ReactNode }) {
           if (updatedProfile && !updatedProfile.preferred_response_length) {
             updatedProfile.preferred_response_length = 'medium';
           }
-          setProfile(updatedProfile);
+          // Prevent stale state overwrite: update only if different
+          setProfile(prev => {
+            if (prev?.subscription_tier === 'pro' && updatedProfile.subscription_tier !== 'pro') {
+              // Double check before downgrading from real-time events that might be out of order
+              refreshProfile(false);
+            }
+            return updatedProfile;
+          });
         }
       )
       .subscribe();
@@ -90,14 +113,25 @@ export function UserProvider({ children }: { children: ReactNode }) {
     };
   }, [session?.user?.id]);
 
+<<<<<<< HEAD
   const fetchProfile = async (userId: string, retries = 3) => {
     try {
       console.log(`[UserContext] Fetching profile for ${userId}... (${retries} retries left)`);
+=======
+  const fetchProfile = async (userId: string, retries = 3): Promise<Profile | null> => {
+    const requestId = ++latestProfileRequestRef.current;
+
+    try {
+      console.log(`[UserContext] Fetching profile for ${userId}... (${retries} retries left)`);
+
+      // Force bypass cache for immediate read after webhook
+>>>>>>> 61252ec (Update profile subscription confirmation flow)
       const { data, error } = await supabase!
         .from('profiles')
         .select('*')
         .eq('id', userId)
         .maybeSingle();
+<<<<<<< HEAD
 
       if (error) {
         console.error(`[UserContext] Supabase profile fetch error:`, error);
@@ -124,17 +158,62 @@ export function UserProvider({ children }: { children: ReactNode }) {
       }
       setProfile(profileData);
       setLoading(false);
+=======
+
+      if (error) {
+        console.error(`[UserContext] Supabase profile fetch error:`, error);
+        throw error;
+      };
+
+      if (!data) {
+        if (retries > 0) {
+          console.log(`[UserContext] Profile not found for ${userId}, retrying in 2s...`);
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          return fetchProfile(userId, retries - 1);
+        }
+        console.error(`[UserContext] Profile not found after all retries for user ${userId}`);
+        if (requestId === latestProfileRequestRef.current) {
+          setProfile(null);
+        }
+        setLoading(false);
+        return null;
+      }
+
+      const profileData = data as Profile;
+      console.log(`[UserContext] Profile fetched success. Tier: ${profileData.subscription_tier}`);
+
+      if (profileData && !profileData.preferred_response_length) {
+        profileData.preferred_response_length = 'medium';
+      }
+
+      if (requestId === latestProfileRequestRef.current) {
+        setProfile(profileData);
+      } else {
+        console.log('[UserContext] Ignoring stale profile response.');
+      }
+      setLoading(false);
+      return profileData;
+
+>>>>>>> 61252ec (Update profile subscription confirmation flow)
     } catch (error) {
       console.error('[UserContext] Exception in fetchProfile:', error);
       if (retries === 0) {
         setLoading(false);
+<<<<<<< HEAD
       } else {
         // Retry on exception too
         setTimeout(() => fetchProfile(userId, retries - 1), 2000);
+=======
+        return null;
+      } else {
+        await new Promise(resolve => setTimeout(resolve, 2000));
+        return fetchProfile(userId, retries - 1);
+>>>>>>> 61252ec (Update profile subscription confirmation flow)
       }
     }
   };
 
+<<<<<<< HEAD
   const refreshProfile = async (showLoading = false) => {
     if (session?.user?.id) {
       console.log(`[UserContext] Profile refresh triggered (loading=${showLoading}) for user ${session.user.id}`);
@@ -155,8 +234,42 @@ export function UserProvider({ children }: { children: ReactNode }) {
       } else {
         setLoading(false);
       }
+=======
+  const refreshProfile = useCallback(async (showLoading = false): Promise<Profile | null> => {
+    if (showLoading) setLoading(true);
+
+    try {
+      const { data: refreshedSessionData, error: refreshError } = await supabase!.auth.refreshSession();
+      if (refreshError) {
+        console.warn('[UserContext] Session refresh warning:', refreshError.message);
+      }
+
+      if (refreshedSessionData.session) {
+        setSession(refreshedSessionData.session);
+      }
+
+      const activeUserId = refreshedSessionData.session?.user?.id ?? session?.user?.id;
+      if (activeUserId) {
+        console.log(`[UserContext] Profile refresh triggered (loading=${showLoading}) for user ${activeUserId}`);
+        return await fetchProfile(activeUserId, 0);
+      }
+
+      console.warn('[UserContext] refreshProfile called but no active session user ID found');
+      const { data: { user } } = await supabase!.auth.getUser();
+      if (user) {
+        console.log(`[UserContext] Found user via getUser fallback: ${user.id}`);
+        return await fetchProfile(user.id, 0);
+      }
+
+      return null;
+    } catch (error) {
+      console.error('[UserContext] refreshProfile failed:', error);
+      return null;
+    } finally {
+      setLoading(false);
+>>>>>>> 61252ec (Update profile subscription confirmation flow)
     }
-  };
+  }, [session?.user?.id]);
 
   const signOut = async () => {
     await supabase!.auth.signOut();
