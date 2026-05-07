@@ -274,9 +274,11 @@ export default function VoiceScreen({ route, navigation }: any) {
     }
   };
 
-  // ── Speech recognition ────────────────────────────────────────────────────
-  const startListening = () => {
-    // Guard with refs (never stale inside callbacks)
+  // ── Speech recognition via OpenAI Whisper (MediaRecorder) ───────────────────
+  // Replaces the unreliable browser Web Speech API.
+  // Flow: getUserMedia → MediaRecorder records audio → user taps mic to stop
+  //       → audio blob sent to /api/transcribe (Whisper) → transcript → David responds.
+  const startListening = async () => {
     if (isDavidSpeakingRef.current) {
       log('startListening blocked — David is still speaking');
       return;
@@ -286,129 +288,149 @@ export default function VoiceScreen({ route, navigation }: any) {
       return;
     }
 
-    // @ts-ignore
-    const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SpeechRecognition) {
-      addLog('SpeechRecognition not supported in this browser');
-      setError('Voice input is not supported in this browser. Try Chrome or Edge.');
+    // Stop any existing recorder
+    if (recognitionRef.current) {
+      try { recognitionRef.current.stop(); } catch (e) {}
+      recognitionRef.current = null;
+    }
+
+    log('Requesting microphone permission');
+    let stream: MediaStream;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+      log('Microphone permission granted');
+    } catch (err: any) {
+      log('Microphone permission denied', err?.message);
+      addLog('Mic permission denied. Use the text box below.');
+      setError('Microphone access was denied. Type your message below instead.');
+      setShowTextFallback(true);
       return;
     }
 
-    // Stop any existing recognition instance cleanly
-    if (recognitionRef.current) {
-      try { recognitionRef.current.stop(); } catch (e) {}
+    // Pick the best supported MIME type
+    const mimeType = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/ogg;codecs=opus',
+      'audio/mp4',
+    ].find(t => MediaRecorder.isTypeSupported(t)) || '';
+
+    log('Starting MediaRecorder', mimeType || 'default');
+    let recorder: MediaRecorder;
+    try {
+      recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
+    } catch (err: any) {
+      log('MediaRecorder init failed', err?.message);
+      addLog(`Could not start recorder: ${err?.message}`);
+      setError('Could not start microphone. Try a different browser.');
+      stream.getTracks().forEach(t => t.stop());
+      return;
     }
 
-    const recognition = new SpeechRecognition();
-    recognition.lang = 'en-US';
-    recognition.interimResults = false;
-    recognition.maxAlternatives = 1;
-    // continuous = false: fires onresult once per utterance, then stops.
-    // This is intentional — we restart after each David response.
-    recognition.continuous = false;
+    const chunks: Blob[] = [];
+    recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
 
-    recognition.onstart = () => {
-      log('Microphone activated — listening');
+    recorder.onstart = () => {
+      log('Microphone activated — listening (Whisper mode)');
       setIsListening(true);
-      addLog('Listening…');
-      // NOTE: do NOT reset micRetryCountRef here — resetting on start was the
-      // bug that kept the counter at 1/5 forever. Only reset on no-speech or
-      // when a transcript is successfully received.
-    };
-
-    recognition.onresult = (event: any) => {
-      const transcript = event.results[0][0].transcript;
-      const confidence = event.results[0][0].confidence;
-      log('Transcript received', `"${transcript}" (confidence: ${(confidence * 100).toFixed(0)}%)`);
-      // Reset retry counter on a real successful transcript
-      micRetryCountRef.current = 0;
-      setMicErrorCount(0);
+      addLog('Listening… tap mic to send');
       setError(null);
-      setIsListening(false);
-      handleVoiceInput(transcript);
     };
 
-    recognition.onerror = (event: any) => {
-      const errCode: string = event.error;
-      log('Speech recognition error', errCode);
+    recorder.onstop = async () => {
+      log('Recording stopped — sending to Whisper');
       setIsListening(false);
+      stream.getTracks().forEach(t => t.stop());
 
       if (!isConnectedRef.current) return;
 
-      if (errCode === 'no-speech') {
-        // Normal — user was quiet. Reset retry counter and listen again.
-        micRetryCountRef.current = 0;
+      if (chunks.length === 0) {
+        addLog('No audio recorded — restarting mic');
         setTimeout(() => startListening(), 300);
         return;
       }
 
-      if (errCode === 'aborted') {
-        // We stopped it ourselves — do nothing.
+      const audioBlob = new Blob(chunks, { type: mimeType || 'audio/webm' });
+      log('Audio blob size', `${audioBlob.size} bytes`);
+
+      if (audioBlob.size < 1000) {
+        addLog('Audio too short — restarting mic');
+        setTimeout(() => startListening(), 300);
         return;
       }
 
-      // For network, audio-capture, service-not-allowed, not-allowed:
-      micRetryCountRef.current += 1;
-      setMicErrorCount(micRetryCountRef.current);
-      const retryNum = micRetryCountRef.current;
+      setIsDavidThinking(true);
+      addLog('Transcribing with Whisper…');
+      log('TTS request sent (Whisper)', `${audioBlob.size} bytes`);
 
-      if (errCode === 'not-allowed') {
-        // User denied mic permission — show text fallback immediately.
-        log('Mic permission denied — switching to text fallback');
-        addLog('Mic permission denied. Use the text box below to talk to David.');
-        setError('Microphone access was denied. Type your message below instead.');
-        setShowTextFallback(true);
-        return;
-      }
+      try {
+        const formData = new FormData();
+        formData.append('audio', audioBlob, `recording.${mimeType.includes('ogg') ? 'ogg' : mimeType.includes('mp4') ? 'mp4' : 'webm'}`);
 
-      if (errCode === 'network') {
-        // Network errors are persistent — show text fallback immediately after 1 retry
-        if (retryNum <= MAX_MIC_RETRIES) {
-          const delay = 2000;
-          log(`Network error — retry ${retryNum}/${MAX_MIC_RETRIES} in ${delay}ms`);
-          addLog(`Mic network error — retrying once…`);
-          setError(`Speech recognition network issue. Retrying…`);
-          setTimeout(() => {
-            if (isConnectedRef.current) startListening();
-          }, delay);
-        } else {
-          log('Network error — switching to text input');
-          addLog('Speech recognition unavailable. Use the text box below.');
-          setError(null); // Clear error — text box is the message
-          setShowTextFallback(true);
+        const response = await fetch('/api/transcribe', {
+          method: 'POST',
+          body: formData,
+        });
+
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({}));
+          throw new Error(err.message || `Transcription failed: ${response.status}`);
         }
-        return;
-      }
 
-      // All other errors (audio-capture, service-not-allowed, etc.)
-      if (retryNum <= 2) {
-        const delay = 1500 * retryNum;
-        log(`Recognition error (${errCode}) — retry ${retryNum}/2 in ${delay}ms`);
-        addLog(`Mic error: ${errCode} — retrying…`);
-        setTimeout(() => {
-          if (isConnectedRef.current) startListening();
-        }, delay);
-      } else {
-        log(`Recognition error (${errCode}) — switching to text fallback`);
-        addLog(`Mic unavailable (${errCode}). Use text input below.`);
-        setError('Microphone unavailable. Type your message below.');
-        setShowTextFallback(true);
+        const data = await response.json();
+        const transcript = data.transcript?.trim() || '';
+        log('Transcript received', `"${transcript}"`);
+
+        setIsDavidThinking(false);
+
+        if (!transcript) {
+          addLog('Empty transcript — restarting mic');
+          if (isConnectedRef.current) setTimeout(() => startListening(), 300);
+          return;
+        }
+
+        // Success — reset error state
+        micRetryCountRef.current = 0;
+        setMicErrorCount(0);
+        setError(null);
+        handleVoiceInput(transcript);
+
+      } catch (err: any) {
+        log('Whisper transcription error', err?.message);
+        addLog(`Transcription error: ${err?.message}`);
+        setIsDavidThinking(false);
+        setError('Could not transcribe audio. Try again.');
+        if (isConnectedRef.current) setTimeout(() => startListening(), 1000);
       }
     };
 
-    recognition.onend = () => {
-      log('Speech recognition ended');
+    recorder.onerror = (e: any) => {
+      log('MediaRecorder error', e?.error?.message || 'unknown');
       setIsListening(false);
+      stream.getTracks().forEach(t => t.stop());
     };
 
-    recognitionRef.current = recognition;
+    recognitionRef.current = recorder;
 
-    try {
-      recognition.start();
-      log('recognition.start() called');
-    } catch (e: any) {
-      log('recognition.start() threw', e?.message);
-      addLog(`Could not start mic: ${e?.message}`);
+    // Record until user taps the mic button (stopListening) or David starts speaking
+    // Auto-stop after 30 seconds as a safety net
+    recorder.start();
+    log('MediaRecorder.start() called');
+
+    // Auto-stop after 30s
+    setTimeout(() => {
+      if (recorder.state === 'recording') {
+        log('Auto-stopping recording after 30s');
+        recorder.stop();
+      }
+    }, 30000);
+  };
+
+  // ── Stop recording (user taps mic while listening) ────────────────────────
+  const stopListening = () => {
+    if (recognitionRef.current && recognitionRef.current.state === 'recording') {
+      log('User stopped recording');
+      recognitionRef.current.stop();
     }
   };
 
@@ -521,7 +543,20 @@ export default function VoiceScreen({ route, navigation }: any) {
           )}
         </AnimatePresence>
 
-        <View style={[styles.mainCircle, isConnected && styles.mainActive]}>
+        <TouchableOpacity
+          style={[styles.mainCircle, isConnected && styles.mainActive,
+            isListening && styles.mainListening]}
+          onPress={() => {
+            if (!isConnected) return;
+            if (isListening) {
+              stopListening();
+            } else if (!isDavidSpeaking && !isDavidThinking) {
+              startListening();
+            }
+          }}
+          disabled={!isConnected || isDavidSpeaking || isDavidThinking}
+          activeOpacity={0.8}
+        >
           {isConnected ? (
             isDavidSpeaking ? (
               <MotionView
@@ -533,12 +568,12 @@ export default function VoiceScreen({ route, navigation }: any) {
             ) : isDavidThinking ? (
               <ActivityIndicator color="#d4af37" size="large" />
             ) : (
-              <Mic color={isListening ? '#d4af37' : '#fff'} size={56} />
+              <Mic color={isListening ? '#0b1e3d' : '#fff'} size={56} />
             )
           ) : (
             <MicOff color="#9CA3AF" size={56} />
           )}
-        </View>
+        </TouchableOpacity>
       </View>
 
       {/* Status label */}
@@ -550,8 +585,8 @@ export default function VoiceScreen({ route, navigation }: any) {
               : isDavidThinking
               ? 'David is thinking…'
               : isListening
-              ? 'Listening…'
-              : 'Tap the mic or speak'}
+              ? 'Tap mic to send'
+              : 'Tap mic to speak'}
           </Text>
         </View>
       )}
@@ -728,6 +763,10 @@ const styles = StyleSheet.create({
   },
   mainActive: {
     backgroundColor: '#0f2a52',
+    borderColor: '#f5d77a',
+  },
+  mainListening: {
+    backgroundColor: '#d4af37',
     borderColor: '#f5d77a',
   },
   statusContainer: {

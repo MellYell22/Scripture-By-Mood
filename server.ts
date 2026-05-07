@@ -481,6 +481,50 @@ Briefly explain how it applies to a person's life today. The reflection must be 
   }
 });
 
+// Transcribe audio using OpenAI Whisper
+app.post("/api/transcribe", express.raw({ type: '*/*', limit: '25mb' }), async (req: any, res) => {
+  try {
+    if (!process.env.OPENAI_API_KEY) {
+      return res.status(500).json({ error: 'OpenAI API key not configured' });
+    }
+
+    const rawBody: Buffer = req.body;
+    if (!rawBody || rawBody.length === 0) {
+      return res.status(400).json({ error: 'No audio data received' });
+    }
+
+    const contentType = req.headers['content-type'] || 'audio/webm';
+    console.log(`[Transcribe] Received ${rawBody.length} bytes, type: ${contentType}`);
+
+    // Determine MIME type and extension
+    const mimeType = contentType.split(';')[0].trim();
+    const extMap: Record<string, string> = {
+      'audio/webm': 'webm', 'audio/ogg': 'ogg', 'audio/mp4': 'mp4',
+      'audio/mpeg': 'mp3', 'audio/wav': 'wav', 'audio/flac': 'flac',
+      'video/webm': 'webm',
+    };
+    const ext = extMap[mimeType] || 'webm';
+
+    const { OpenAI } = await import('openai');
+    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const audioFile = new File([rawBody], `audio.${ext}`, { type: mimeType });
+
+    const transcription = await openai.audio.transcriptions.create({
+      file: audioFile,
+      model: 'whisper-1',
+      language: 'en',
+      response_format: 'json',
+    });
+
+    const transcript = transcription.text?.trim() || '';
+    console.log(`[Transcribe] "${transcript}"`);
+    res.json({ transcript });
+  } catch (error: any) {
+    console.error('[Transcribe] Error:', error.message);
+    res.status(500).json({ error: 'Transcription failed', message: error.message });
+  }
+});
+
 app.post("/api/speech", async (req, res) => {
   const { text } = req.body;
 
