@@ -7,7 +7,6 @@ const MotionView = motion(View);
 import { ChatMessage } from '../types';
 import { getChatResponse, generateSpeech } from '../services/ai';
 import { hasProAccess } from '../utils/tier';
-import { useMusic } from '../MusicContext';
 import { saveAIFeedback } from '../services/supabase';
 import { useUser } from '../UserContext';
 
@@ -26,7 +25,6 @@ const log = (event: string, detail?: any) => {
 // and server.ts (local dev). Both are kept in sync.
 
 export default function VoiceScreen({ route, navigation }: any) {
-  const { playbackError } = useMusic();
   const { profile } = useUser();
 
   // ── UI state ──────────────────────────────────────────────────────────────
@@ -68,22 +66,6 @@ export default function VoiceScreen({ route, navigation }: any) {
     checkApiKey();
     return () => { stopSession(); };
   }, []);
-
-  useEffect(() => {
-    if (playbackError && messages.length > 0) {
-      const last = messages[messages.length - 1];
-      if (last.role === 'assistant' && (last.content.includes("Playing") || last.content.includes("putting on"))) {
-        setMessages(prev => {
-          const arr = [...prev];
-          const i = arr.length - 1;
-          if (!arr[i].content.includes("playback did not start")) {
-            arr[i] = { ...arr[i], content: arr[i].content + "\n\nI found the song, but playback did not start. Let me try another way." };
-          }
-          return arr;
-        });
-      }
-    }
-  }, [playbackError]);
 
   // ── API key check (AI Studio env only) ───────────────────────────────────
   const checkApiKey = async () => {

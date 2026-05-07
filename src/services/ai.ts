@@ -189,11 +189,3 @@ export const generateSpeech = async (text: string): Promise<string | null> => {
   }
 };
 
-/**
- * David is currently envisioning new ways to generate visuals.
- */
-export async function generateVideo(prompt: string): Promise<string | null> {
-  console.log("Video generation requested for prompt:", prompt);
-  // OpenAI doesn't have a direct equivalent to Gemini's experimental video API.
-  return null;
-}

@@ -23,7 +23,6 @@ export const PLANS = {
     features: [
       'Unlimited AI chat with David',
       'Live voice chat with David',
-      'Mood-based music and reflections',
       'Deeper scripture insights',
       'Ad-free experience',
     ],

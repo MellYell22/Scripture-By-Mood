@@ -1,20 +1,15 @@
 import React, { useState } from 'react';
-import { View, Text, TouchableOpacity, ScrollView, StyleSheet, ActivityIndicator, TextInput, Image } from 'react-native';
+import { View, Text, TouchableOpacity, ScrollView, StyleSheet, ActivityIndicator, TextInput } from 'react-native';
 import { motion } from 'motion/react';
 import { getMoodScriptures, generateSpeech } from '../services/ai';
 
 const MotionView = motion(View);
 import { MoodResponse } from '../types';
-import { Sparkles, Search, Volume2, Music, Play, Pause, Frown, Wind, User, Heart, Flame, Sun, HelpCircle, Layers, Cloud, X, ThumbsUp, ThumbsDown, Bookmark, Check } from 'lucide-react';
+import { Sparkles, Search, Volume2, Frown, Wind, User, Heart, Flame, Sun, HelpCircle, Layers, Cloud, X, ThumbsUp, ThumbsDown, Bookmark, Check } from 'lucide-react';
 import { supabase, saveAIFeedback, saveScripture } from '../services/supabase';
 import { Profile } from '../types';
 import { MOODS_DATA, MoodData } from '../constants/moods';
-import { WORSHIP_SONGS, Song } from '../constants/songs';
 import { MessageCircle } from 'lucide-react';
-import { MusicProvider, useMusic } from '../MusicContext';
-import { MusicPlayer } from '../components/MusicPlayer';
-import { VideoGenerator } from '../components/VideoGenerator';
-import { Video } from 'lucide-react';
 
 type ReadingMode = 'sanctuary' | 'parchment' | 'midnight';
 type FontSize = 'small' | 'medium' | 'large';
@@ -79,7 +74,6 @@ const NT_BOOKS = [
 import { useUser } from '../UserContext';
 
 export default function MoodScreen({ route, navigation }: any) {
-  const { playSong, currentSong, isPlaying } = useMusic();
   const { profile } = useUser();
   const [mood, setMood] = useState(route?.params?.mood || '');
   const [searchQuery, setSearchQuery] = useState('');
@@ -91,7 +85,6 @@ export default function MoodScreen({ route, navigation }: any) {
   const [readingMode, setReadingMode] = useState<ReadingMode>('sanctuary');
   const [fontSize, setFontSize] = useState<FontSize>('medium');
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [selectedVerseForVideo, setSelectedVerseForVideo] = useState<{ verse: string, reference: string } | null>(null);
   const [savedIds, setSavedIds] = useState<Set<number>>(new Set());
   const [savingId, setSavingId] = useState<number | null>(null);
   const audioContextRef = React.useRef<AudioContext | null>(null);
@@ -367,40 +360,6 @@ export default function MoodScreen({ route, navigation }: any) {
                 <Text style={[styles.chatButtonText, { color: theme.accent }]}>CONTINUE WITH DAVID</Text>
               </TouchableOpacity>
             </View>
-
-            {/* Mood-based Worship Recommendations */}
-            <View style={styles.musicSection}>
-              <View style={styles.musicHeader}>
-                <Music size={16} color={theme.accent} />
-                <Text style={[styles.musicTitle, { color: theme.accent }]}>Worship for this Mood</Text>
-              </View>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.musicScroll}>
-                {WORSHIP_SONGS.filter(s => s.moods.includes(mood.toUpperCase())).map((song) => (
-                  <TouchableOpacity 
-                    key={song.id} 
-                    style={[
-                      styles.musicCard, 
-                      { backgroundColor: theme.card, borderColor: theme.border },
-                      currentSong?.id === song.id && { borderColor: theme.accent, borderWidth: 2 }
-                    ]}
-                    onPress={() => playSong(song)}
-                  >
-                    <Image source={{ uri: song.coverUrl }} style={styles.musicCover} />
-                    <View style={styles.musicCardDetails}>
-                      <Text style={[styles.musicCardTitle, { color: theme.text }]} numberOfLines={1}>{song.title}</Text>
-                      <Text style={[styles.musicCardArtist, { color: theme.muted }]} numberOfLines={1}>{song.artist}</Text>
-                    </View>
-                    <View style={[styles.musicPlayButton, { backgroundColor: theme.accent }]}>
-                      {currentSong?.id === song.id && isPlaying ? (
-                        <Pause size={12} color={readingMode === 'parchment' ? '#fff' : '#0b1e3d'} fill={readingMode === 'parchment' ? '#fff' : '#0b1e3d'} />
-                      ) : (
-                        <Play size={12} color={readingMode === 'parchment' ? '#fff' : '#0b1e3d'} fill={readingMode === 'parchment' ? '#fff' : '#0b1e3d'} />
-                      )}
-                    </View>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
             <View style={styles.filterContainer}>
               <TouchableOpacity 
                 style={[styles.filterPill, testamentFilter === 'all' && { backgroundColor: theme.accent }]}
@@ -426,14 +385,7 @@ export default function MoodScreen({ route, navigation }: any) {
               {testamentFilter === 'all' ? 'Relevant Scriptures' : 
                testamentFilter === 'old' ? 'Old Testament Wisdom' : 'New Testament Hope'}
             </Text>
-            
-            {selectedVerseForVideo && (
-              <VideoGenerator 
-                title={selectedVerseForVideo.reference}
-                prompt={`A cinematic, inspiring, and spiritually grounded visual accompaniment for the Bible verse: "${selectedVerseForVideo.verse}". The mood is ${mood}. High quality, peaceful, and reverent.`}
-                onClose={() => setSelectedVerseForVideo(null)}
-              />
-            )}
+
 
             {filteredScriptures.length === 0 ? (
               <View style={styles.noResults}>
@@ -473,14 +425,6 @@ export default function MoodScreen({ route, navigation }: any) {
                       <Text style={[styles.verseActionButtonText, { color: savedIds.has(index) ? '#10B981' : theme.accent }]}>
                         {savedIds.has(index) ? 'SAVED' : 'SAVE VERSE'}
                       </Text>
-                    </TouchableOpacity>
-
-                    <TouchableOpacity 
-                      style={[styles.verseActionButton, { borderColor: theme.accent }]}
-                      onPress={() => setSelectedVerseForVideo({ verse: item.verse, reference: item.reference })}
-                    >
-                      <Video size={14} color={theme.accent} />
-                      <Text style={[styles.verseActionButtonText, { color: theme.accent }]}>GENERATE VISION</Text>
                     </TouchableOpacity>
                   </View>
 
@@ -767,59 +711,6 @@ const styles = StyleSheet.create({
     fontSize: 9,
     fontWeight: 'bold',
     letterSpacing: 1,
-  },
-  musicSection: {
-    marginBottom: 25,
-  },
-  musicHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-    gap: 8,
-  },
-  musicTitle: {
-    fontSize: 10,
-    fontWeight: 'bold',
-    letterSpacing: 1.5,
-    textTransform: 'uppercase',
-  },
-  musicScroll: {
-    flexDirection: 'row',
-  },
-  musicCard: {
-    width: 160,
-    padding: 10,
-    borderRadius: 16,
-    borderWidth: 1,
-    marginRight: 12,
-    flexDirection: 'row',
-    alignItems: 'center',
-  },
-  musicCover: {
-    width: 40,
-    height: 40,
-    borderRadius: 8,
-  },
-  musicCardDetails: {
-    flex: 1,
-    marginLeft: 10,
-  },
-  musicCardTitle: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    fontFamily: 'Playfair Display',
-  },
-  musicCardArtist: {
-    fontSize: 10,
-    marginTop: 2,
-  },
-  musicPlayButton: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginLeft: 4,
   },
   floatingPlayer: {
     position: 'absolute',

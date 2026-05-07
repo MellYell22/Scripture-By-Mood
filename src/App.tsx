@@ -1,8 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, Platform, ActivityIndicator } from 'react-native';
-import { Home, Search, MessageCircle, Mic, User, Music, X } from 'lucide-react';
-import { supabase, isSupabaseConfigured } from './services/supabase';
-import { Profile } from './types';
+import { Home, Search, MessageCircle, Mic } from 'lucide-react';
+import { isSupabaseConfigured } from './services/supabase';
 import { AlertTriangle } from 'lucide-react';
 
 // Screens
@@ -11,7 +10,6 @@ import MoodScreen from './screens/MoodScreen';
 import ReflectionScreen from './screens/ReflectionScreen';
 import ChatScreen from './screens/ChatScreen';
 import VoiceScreen from './screens/VoiceScreen';
-import MusicScreen from './screens/MusicScreen';
 import ProfileScreen from './screens/ProfileScreen';
 import PaymentSuccessScreen from './screens/PaymentSuccessScreen';
 import AuthScreen from './screens/AuthScreen';
@@ -20,12 +18,9 @@ import OnboardingScreen from './screens/OnboardingScreen';
 import { Navbar } from './components/Navbar';
 import { FullScreenBackground } from './components/FullScreenBackground';
 import { Analytics } from "@vercel/analytics/react";
-import { MusicProvider, useMusic } from './MusicContext';
-import { MusicPlayer } from './components/MusicPlayer';
 import { VerseOfTheDayModal } from './components/VerseOfTheDayModal';
 import { getVerseOfTheDay } from './services/ai';
 import { Scripture } from './types';
-
 import { UserProvider, useUser } from './UserContext';
 
 function AppContent() {
@@ -35,7 +30,6 @@ function AppContent() {
   const [routeParams, setRouteParams] = useState<any>(null);
   const [showVerseModal, setShowVerseModal] = useState(false);
   const [dailyVerse, setDailyVerse] = useState<Scripture | null>(null);
-  const { currentSong, stopSong, nextSong, prevSong, setPlaybackError } = useMusic();
 
   // Secondary safety net for loading state
   useEffect(() => {
@@ -87,7 +81,6 @@ function AppContent() {
 
     const today = new Date().toISOString().split('T')[0];
     const lastShown = localStorage.getItem('last_verse_shown_date');
-    
     if (lastShown === today) return;
 
     const now = new Date();
@@ -115,7 +108,7 @@ function AppContent() {
           <AlertTriangle color="#F59E0B" size={48} />
           <Text style={styles.configErrorTitle}>Configuration Required</Text>
           <Text style={styles.configErrorText}>
-            Please set the following environment variables in the Secrets panel. 
+            Please set the following environment variables in the Secrets panel.
             IMPORTANT: The URL must start with https://
           </Text>
           <View style={styles.configList}>
@@ -169,33 +162,32 @@ function AppContent() {
   const renderScreen = () => {
     const nav = { navigate, setParams };
     switch (currentRoute) {
-      case 'Home': return <HomeScreen navigation={nav} />;
-      case 'Mood': return <MoodScreen navigation={nav} route={{ params: routeParams }} />;
-      case 'Reflection': return <ReflectionScreen navigation={nav} />;
-      case 'Chat': return <ChatScreen navigation={nav} />;
-      case 'Voice': return <VoiceScreen navigation={nav} />;
-      case 'Music': return <MusicScreen />;
-      case 'Profile': return <ProfileScreen navigation={nav} route={{ params: routeParams }} />;
+      case 'Home':         return <HomeScreen navigation={nav} />;
+      case 'Mood':         return <MoodScreen navigation={nav} route={{ params: routeParams }} />;
+      case 'Reflection':   return <ReflectionScreen navigation={nav} />;
+      case 'Chat':         return <ChatScreen navigation={nav} />;
+      case 'Voice':        return <VoiceScreen navigation={nav} />;
+      case 'Profile':      return <ProfileScreen navigation={nav} route={{ params: routeParams }} />;
       case 'PaymentSuccess': return <PaymentSuccessScreen navigation={nav} />;
-      default: return <HomeScreen navigation={nav} />;
+      default:             return <HomeScreen navigation={nav} />;
     }
   };
 
-  const TabButton = ({ name, icon: Icon }: { name: string, icon: any }) => (
-    <TouchableOpacity 
-      style={styles.tabButton} 
+  const TabButton = ({ name, label, icon: Icon }: { name: string; label: string; icon: any }) => (
+    <TouchableOpacity
+      style={styles.tabButton}
       onPress={() => navigate(name)}
     >
       {currentRoute === name && <View style={styles.activeIndicator} />}
-      <Icon 
-        color={currentRoute === name ? '#d4af37' : 'rgba(255, 255, 255, 0.3)'} 
-        size={22} 
+      <Icon
+        color={currentRoute === name ? '#d4af37' : 'rgba(255, 255, 255, 0.3)'}
+        size={22}
       />
       <Text style={[
-        styles.tabText, 
+        styles.tabText,
         { color: currentRoute === name ? '#d4af37' : 'rgba(255, 255, 255, 0.3)' }
       ]}>
-        {name}
+        {label}
       </Text>
     </TouchableOpacity>
   );
@@ -210,32 +202,17 @@ function AppContent() {
         </View>
       </FullScreenBackground>
 
-      <VerseOfTheDayModal 
-        visible={showVerseModal} 
-        onClose={() => setShowVerseModal(false)} 
-        verse={dailyVerse} 
+      <VerseOfTheDayModal
+        visible={showVerseModal}
+        onClose={() => setShowVerseModal(false)}
+        verse={dailyVerse}
       />
 
-      {currentSong && (
-        <View style={styles.globalPlayerWrapper}>
-          <TouchableOpacity style={styles.closePlayerButton} onPress={stopSong}>
-            <X size={20} color="#ff4444" />
-          </TouchableOpacity>
-          <MusicPlayer 
-            song={currentSong} 
-            onNext={nextSong}
-            onPrev={prevSong}
-            onReady={() => setPlaybackError(null)}
-            onError={(err) => setPlaybackError(err)}
-          />
-        </View>
-      )}
       <View style={styles.tabBar}>
-        <TabButton name="Home" icon={Home} />
-        <TabButton name="Reflection" icon={Search} />
-        <TabButton name="Music" icon={Music} />
-        <TabButton name="Chat" icon={MessageCircle} />
-        <TabButton name="Voice" icon={Mic} />
+        <TabButton name="Home"       label="Home"       icon={Home} />
+        <TabButton name="Reflection" label="Reflection" icon={Search} />
+        <TabButton name="Chat"       label="Chat"       icon={MessageCircle} />
+        <TabButton name="Voice"      label="Voice"      icon={Mic} />
       </View>
     </View>
   );
@@ -244,9 +221,7 @@ function AppContent() {
 export default function App() {
   return (
     <UserProvider>
-      <MusicProvider>
-        <AppContent />
-      </MusicProvider>
+      <AppContent />
     </UserProvider>
   );
 }
@@ -295,24 +270,6 @@ const styles = StyleSheet.create({
     backgroundColor: '#d4af37',
     borderRadius: 2,
   },
-  globalPlayerWrapper: {
-    position: 'absolute',
-    bottom: Platform.OS === 'ios' ? 100 : 80,
-    left: 10,
-    right: 10,
-    zIndex: 1000,
-  },
-  closePlayerButton: {
-    position: 'absolute',
-    top: -10,
-    right: -10,
-    zIndex: 1001,
-    backgroundColor: '#0b1e3d',
-    borderRadius: 15,
-    padding: 5,
-    borderWidth: 1,
-    borderColor: 'rgba(212, 175, 55, 0.2)',
-  },
   configErrorContainer: {
     flex: 1,
     backgroundColor: '#FFFBEB',
@@ -352,5 +309,5 @@ const styles = StyleSheet.create({
     color: '#D97706',
     marginTop: 30,
     textAlign: 'center',
-  }
+  },
 });

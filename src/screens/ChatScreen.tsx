@@ -1,81 +1,41 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { View, Text, TextInput, TouchableOpacity, ScrollView, StyleSheet, KeyboardAvoidingView, Platform, ActivityIndicator } from 'react-native';
-import { Send, Mic, ThumbsUp, ThumbsDown, Volume2, Square, VolumeX } from 'lucide-react';
-import { getChatResponse, getChatResponseStream, generateSpeech, ChatHistoryMessage } from '../services/ai';
-import { ChatMessage, Profile } from '../types';
-import { supabase, saveAIFeedback } from '../services/supabase';
-import { useMusic } from '../MusicContext';
-import { findSong, extractSongTitle, openYouTubeSearch } from '../utils/music';
-
+import { Send, Mic, ThumbsUp, ThumbsDown, Volume2, Square } from 'lucide-react';
+import { getChatResponseStream, generateSpeech, ChatHistoryMessage } from '../services/ai';
+import { ChatMessage } from '../types';
+import { saveAIFeedback } from '../services/supabase';
 import { useUser } from '../UserContext';
 
 export default function ChatScreen({ navigation }: any) {
-  const { playSong, playbackError } = useMusic();
   const { profile } = useUser();
   const [messages, setMessages] = useState<ChatMessage[]>([]);
 
   useEffect(() => {
     const greetings = [
       "Hello, I'm David. How can I encourage you today?",
-      "Hi, I’m David. What’s on your mind?",
-      "Hey! I’m David. I’m glad you’re here. What would you like to talk about?",
+      "Hi, I'm David. What's on your mind?",
+      "Hey! I'm David. I'm glad you're here. What would you like to talk about?",
       "Hello. I'm David. Is there something specific you'd like to explore today?",
       "Hi there. I'm David. I'm here for support, scripture, or just to chat."
     ];
     const randomGreeting = greetings[Math.floor(Math.random() * greetings.length)];
     setMessages([{ role: 'assistant', content: randomGreeting }]);
   }, []);
+
   const [input, setInput] = useState('');
   const [loading, setLoading] = useState(false);
   const [speakingIndex, setSpeakingIndex] = useState<number | null>(null);
   const scrollViewRef = useRef<ScrollView>(null);
-  const audioContextRef = useRef<AudioContext | null>(null);
-  const currentSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
 
   useEffect(() => {
     return () => {
-      if (audioContextRef.current) {
-        audioContextRef.current.close();
+      if (currentAudioRef.current) {
+        currentAudioRef.current.pause();
+        currentAudioRef.current = null;
       }
     };
   }, []);
-
-  useEffect(() => {
-    if (playbackError && messages.length > 0) {
-      const lastMessage = messages[messages.length - 1];
-      if (lastMessage.role === 'assistant' && (lastMessage.content.includes("Playing") || lastMessage.content.includes("putting on"))) {
-        setMessages(prev => {
-          const newMessages = [...prev];
-          const lastIdx = newMessages.length - 1;
-          if (!newMessages[lastIdx].content.includes("playback did not start")) {
-            newMessages[lastIdx] = { 
-              ...newMessages[lastIdx], 
-              content: newMessages[lastIdx].content + "\n\nI found the song, but playback did not start. Let me try another way." 
-            };
-          }
-          return newMessages;
-        });
-      }
-    }
-  }, [playbackError]);
-
-  const detectAndPlaySong = (text: string) => {
-    const songTitle = extractSongTitle(text);
-    if (!songTitle) return null;
-
-    const song = findSong(songTitle);
-    if (song && song.isAvailable !== false) {
-      try {
-        playSong(song);
-        return { type: 'library' as const, song };
-      } catch (e) {
-        return { type: 'error' as const, song };
-      }
-    } else {
-      openYouTubeSearch(songTitle);
-      return { type: 'youtube' as const, title: songTitle };
-    }
-  };
 
   const handleSend = async () => {
     const trimmedInput = input.trim();
@@ -87,26 +47,12 @@ export default function ChatScreen({ navigation }: any) {
     setLoading(true);
 
     try {
-      const songResult = detectAndPlaySong(userMessage.content);
-      if (songResult) {
-        const content = songResult.type === 'library' 
-          ? `Playing '${songResult.song.title}' now...`
-          : songResult.type === 'error'
-          ? `I found '${songResult.song.title}', but I'm having trouble starting the playback. Let me try another way...`
-          : `I couldn't find '${songResult.title}' in our library, so I'm opening it on YouTube for you now...`;
-        
-        setMessages(prev => [...prev, { role: 'assistant', content }]);
-        setLoading(false);
-        return;
-      }
-
       const history: ChatHistoryMessage[] = messages.map(msg => ({
         role: msg.role === 'user' ? 'user' : 'assistant',
         content: msg.content
       }));
       history.push({ role: 'user', content: userMessage.content });
 
-      // Add an empty assistant message to start streaming into
       const modelMessageIndex = messages.length + 1;
       setMessages(prev => [...prev, { role: 'assistant', content: "" }]);
 
@@ -117,20 +63,8 @@ export default function ChatScreen({ navigation }: any) {
           return newMessages;
         });
       }, profile?.preferred_response_length || 'medium');
-      
-      if (response) {
-        const responseSongResult = detectAndPlaySong(response);
-        if (responseSongResult?.type === 'error') {
-          setMessages(prev => {
-            const newMessages = [...prev];
-            newMessages[modelMessageIndex] = { 
-              role: 'assistant', 
-              content: response + "\n\nI found the song, but playback did not start. Let me try another way." 
-            };
-            return newMessages;
-          });
-        }
-      } else {
+
+      if (!response) {
         setMessages(prev => {
           const newMessages = [...prev];
           newMessages[modelMessageIndex] = { role: 'assistant', content: "I'm sorry, I couldn't process that." };
@@ -140,16 +74,13 @@ export default function ChatScreen({ navigation }: any) {
     } catch (error: any) {
       console.error("Chat Error:", error);
       let errorMessage = "I'm having a bit of trouble connecting right now. Let's try again in a moment.";
-      
       if (error?.message?.includes("API_KEY_INVALID") || error?.message?.includes("API key not found")) {
         errorMessage = "It looks like the API key is missing or invalid. Please ensure the OPENAI_API_KEY is set in the environment.";
       } else if (error?.message?.includes("quota")) {
         errorMessage = "I've reached my daily limit for conversations. Please try again later.";
       }
-      
       setMessages(prev => {
         const newMessages = [...prev];
-        // If we added an empty message for streaming, replace it. Otherwise append.
         if (newMessages.length > messages.length + 1) {
           newMessages[messages.length + 1] = { role: 'assistant', content: errorMessage };
           return newMessages;
@@ -164,24 +95,17 @@ export default function ChatScreen({ navigation }: any) {
   const handleFeedback = async (index: number, type: 'up' | 'down') => {
     const message = messages[index];
     if (!message || message.role !== 'assistant' || !profile) return;
-
     const isHelpful = type === 'up';
-    
-    setMessages(prev => prev.map((msg, i) => 
+    setMessages(prev => prev.map((msg, i) =>
       i === index ? { ...msg, feedback: msg.feedback === type ? undefined : type } : msg
     ));
-
     await saveAIFeedback(profile.id, 'chat', message.content, isHelpful);
   };
 
   const stopSpeaking = () => {
-    if (currentSourceRef.current) {
-      try {
-        currentSourceRef.current.stop();
-      } catch (e) {
-        // Already stopped
-      }
-      currentSourceRef.current = null;
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current = null;
     }
     setSpeakingIndex(null);
   };
@@ -191,39 +115,28 @@ export default function ChatScreen({ navigation }: any) {
       stopSpeaking();
       return;
     }
-    
-    // Stop any current playback
     stopSpeaking();
-    
     setSpeakingIndex(index);
     try {
-      const base64Audio = await generateSpeech(text);
-      if (base64Audio) {
-        if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
-          audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
-        }
-        const context = audioContextRef.current;
-        if (context.state === 'suspended') {
-          await context.resume();
-        }
-
-        const binary = atob(base64Audio);
-        const bytes = new Uint8Array(binary.length);
-        for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-        
-        // Properly decode the MP3/AAC data from OpenAI
-        const audioBuffer = await context.decodeAudioData(bytes.buffer);
-        
-        const source = context.createBufferSource();
-        source.buffer = audioBuffer;
-        source.connect(context.destination);
-        source.onended = () => {
-          if (speakingIndex === index) {
-            setSpeakingIndex(null);
-          }
+      // generateSpeech returns a blob URL — use HTML Audio directly
+      const audioUrl = await generateSpeech(text);
+      if (audioUrl) {
+        const audio = new Audio(audioUrl);
+        currentAudioRef.current = audio;
+        audio.onended = () => {
+          setSpeakingIndex(null);
+          URL.revokeObjectURL(audioUrl);
+          currentAudioRef.current = null;
         };
-        currentSourceRef.current = source;
-        source.start();
+        audio.onerror = () => {
+          setSpeakingIndex(null);
+          URL.revokeObjectURL(audioUrl);
+          currentAudioRef.current = null;
+        };
+        const playPromise = audio.play();
+        if (playPromise !== undefined) {
+          playPromise.catch(() => setSpeakingIndex(null));
+        }
       } else {
         setSpeakingIndex(null);
       }
@@ -238,8 +151,8 @@ export default function ChatScreen({ navigation }: any) {
   }, [messages]);
 
   return (
-    <KeyboardAvoidingView 
-      style={styles.container} 
+    <KeyboardAvoidingView
+      style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       keyboardVerticalOffset={Platform.OS === 'ios' ? 90 : 0}
     >
@@ -248,8 +161,7 @@ export default function ChatScreen({ navigation }: any) {
           <Text style={styles.headerTitle}>David</Text>
         </View>
         <Text style={styles.headerSubtitle}>AI Spiritual Companion</Text>
-        
-        <TouchableOpacity 
+        <TouchableOpacity
           style={styles.voiceSwitchButton}
           onPress={() => navigation.navigate('Voice')}
         >
@@ -258,16 +170,16 @@ export default function ChatScreen({ navigation }: any) {
         </TouchableOpacity>
       </View>
 
-      <ScrollView 
+      <ScrollView
         ref={scrollViewRef}
         style={styles.chatContainer}
         contentContainerStyle={styles.chatContent}
       >
         {messages.map((msg, index) => (
-          <View 
-            key={index} 
+          <View
+            key={index}
             style={[
-              styles.messageBubble, 
+              styles.messageBubble,
               msg.role === 'user' ? styles.userBubble : styles.modelBubble
             ]}
           >
@@ -279,41 +191,28 @@ export default function ChatScreen({ navigation }: any) {
             </Text>
             {msg.role === 'assistant' && (
               <View style={styles.feedbackContainer}>
-                <TouchableOpacity 
+                <TouchableOpacity
                   onPress={() => speakMessage(index, msg.content)}
                   style={styles.feedbackButton}
                 >
                   {speakingIndex === index ? (
-                    <Square 
-                      size={14} 
-                      color="#d4af37" 
-                      fill="#d4af37"
-                    />
+                    <Square size={14} color="#d4af37" fill="#d4af37" />
                   ) : (
-                    <Volume2 
-                      size={14} 
-                      color="rgba(212, 175, 55, 0.6)" 
-                    />
+                    <Volume2 size={14} color="rgba(212, 175, 55, 0.6)" />
                   )}
                 </TouchableOpacity>
                 <View style={{ flex: 1 }} />
-                <TouchableOpacity 
-                  onPress={() => handleFeedback(index, 'up')}
-                  style={styles.feedbackButton}
-                >
-                  <ThumbsUp 
-                    size={14} 
-                    color={msg.feedback === 'up' ? '#d4af37' : 'rgba(212, 175, 55, 0.4)'} 
+                <TouchableOpacity onPress={() => handleFeedback(index, 'up')} style={styles.feedbackButton}>
+                  <ThumbsUp
+                    size={14}
+                    color={msg.feedback === 'up' ? '#d4af37' : 'rgba(212, 175, 55, 0.4)'}
                     fill={msg.feedback === 'up' ? '#d4af37' : 'transparent'}
                   />
                 </TouchableOpacity>
-                <TouchableOpacity 
-                  onPress={() => handleFeedback(index, 'down')}
-                  style={styles.feedbackButton}
-                >
-                  <ThumbsDown 
-                    size={14} 
-                    color={msg.feedback === 'down' ? '#ef4444' : 'rgba(212, 175, 55, 0.4)'} 
+                <TouchableOpacity onPress={() => handleFeedback(index, 'down')} style={styles.feedbackButton}>
+                  <ThumbsDown
+                    size={14}
+                    color={msg.feedback === 'down' ? '#ef4444' : 'rgba(212, 175, 55, 0.4)'}
                     fill={msg.feedback === 'down' ? '#ef4444' : 'transparent'}
                   />
                 </TouchableOpacity>
@@ -337,20 +236,15 @@ export default function ChatScreen({ navigation }: any) {
           multiline
           blurOnSubmit={false}
           onKeyPress={(e: any) => {
-            if (Platform.OS === 'web' || Platform.OS === 'ios' || Platform.OS === 'android') {
-              if (e.nativeEvent.key === 'Enter' && !e.nativeEvent.shiftKey) {
-                e.preventDefault();
-                handleSend();
-              }
+            if (e.nativeEvent.key === 'Enter' && !e.nativeEvent.shiftKey) {
+              e.preventDefault();
+              handleSend();
             }
           }}
         />
-        <TouchableOpacity 
-          style={[
-            styles.sendButton, 
-            (!input.trim() || loading) && styles.sendButtonDisabled
-          ]} 
-          onPress={handleSend} 
+        <TouchableOpacity
+          style={[styles.sendButton, (!input.trim() || loading) && styles.sendButtonDisabled]}
+          onPress={handleSend}
           disabled={loading || !input.trim()}
         >
           <Send color="#fff" size={20} opacity={(!input.trim() || loading) ? 0.5 : 1} />
@@ -380,7 +274,6 @@ const styles = StyleSheet.create({
     color: '#d4af37',
     textTransform: 'uppercase',
     letterSpacing: 2,
-    fontFamily: 'Cinzel',
   },
   headerTitleContainer: {
     flexDirection: 'row',
@@ -444,7 +337,6 @@ const styles = StyleSheet.create({
   messageText: {
     fontSize: 15,
     lineHeight: 22,
-    fontFamily: 'Playfair Display',
   },
   userText: {
     color: '#0b1e3d',

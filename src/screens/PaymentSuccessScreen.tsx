@@ -99,7 +99,7 @@ export default function PaymentSuccessScreen({ navigation }: { navigation: any }
           <Text style={styles.description}>
             {isActivating 
               ? 'Our systems are receiving the confirmation from Stripe. Your account will be transformed into Pro momentarily...'
-              : 'Your transformation is complete. You now have unlimited access to AI insights and premium music.'}
+              : 'Your transformation is complete. You now have unlimited access to AI insights and deeper scripture reflections.'}
           </Text>
 
           {!isActivating && (
@@ -131,10 +131,6 @@ export default function PaymentSuccessScreen({ navigation }: { navigation: any }
            <View style={styles.benefitItem}>
              <ShieldCheck size={16} color="#d4af37" />
              <Text style={styles.benefitText}>Extended Voice Responses</Text>
-           </View>
-           <View style={styles.benefitItem}>
-             <ShieldCheck size={16} color="#d4af37" />
-             <Text style={styles.benefitText}>Full Premium Music Library</Text>
            </View>
         </View>
       </View>
