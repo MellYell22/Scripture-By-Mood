@@ -55,7 +55,7 @@ export default function VoiceScreen({ route, navigation }: any) {
   const audioContextRef     = useRef<AudioContext | null>(null);
   // Retry tracking for speech recognition network errors
   const micRetryCountRef    = useRef(0);
-  const MAX_MIC_RETRIES     = 5;
+  const MAX_MIC_RETRIES     = 2; // Show text fallback after 2 network failures
 
   // ── Logging helper (also pushes to on-screen debug panel) ────────────────
   const addLog = (msg: string) => {
@@ -329,18 +329,19 @@ export default function VoiceScreen({ route, navigation }: any) {
       log('Microphone activated — listening');
       setIsListening(true);
       addLog('Listening…');
-      // Clear network error message once mic starts successfully after retries
-      if (micRetryCountRef.current > 0) {
-        micRetryCountRef.current = 0;
-        setMicErrorCount(0);
-        setError(null);
-      }
+      // NOTE: do NOT reset micRetryCountRef here — resetting on start was the
+      // bug that kept the counter at 1/5 forever. Only reset on no-speech or
+      // when a transcript is successfully received.
     };
 
     recognition.onresult = (event: any) => {
       const transcript = event.results[0][0].transcript;
       const confidence = event.results[0][0].confidence;
       log('Transcript received', `"${transcript}" (confidence: ${(confidence * 100).toFixed(0)}%)`);
+      // Reset retry counter on a real successful transcript
+      micRetryCountRef.current = 0;
+      setMicErrorCount(0);
+      setError(null);
       setIsListening(false);
       handleVoiceInput(transcript);
     };
