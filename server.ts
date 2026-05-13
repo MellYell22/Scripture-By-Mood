@@ -607,11 +607,16 @@ async function startServer() {
   // Only listen if not on Vercel
   if (!process.env.VERCEL) {
     app.listen(PORT, "0.0.0.0", () => {
-      console.log(`Server running on http://localhost:${PORT}`);
-      console.log(`NODE_ENV: ${process.env.NODE_ENV}`);
-      console.log(`APP_URL: ${process.env.APP_URL || "not set (defaulting to localhost:3000)"}`);
-      console.log(`Stripe Configured: ${!!getStripe()}`);
-      console.log(`Supabase Configured: ${!!supabase}`);
+      console.log(`\n🚀 Server running on http://localhost:${PORT}`);
+      console.log(`🌍 NODE_ENV: ${process.env.NODE_ENV}`);
+      console.log(`🔗 APP_URL: ${process.env.APP_URL || "not set (defaulting to localhost:3000)"}`);
+      
+      console.log("\n--- Integration Status ---");
+      console.log(`💳 Stripe: ${getStripe() ? "✅ Configured" : "❌ Missing STRIPE_SECRET_KEY"}`);
+      console.log(`🗄️ Supabase: ${supabase ? "✅ Configured" : "❌ Missing SUPABASE_URL/SERVICE_ROLE_KEY"}`);
+      console.log(`🤖 OpenAI: ${process.env.OPENAI_API_KEY ? "✅ Configured" : "❌ Missing OPENAI_API_KEY"}`);
+      console.log(`🎙️ ElevenLabs: ${process.env.ELEVENLABS_API_KEY ? "✅ Configured" : "❌ Missing ELEVENLABS_API_KEY"}`);
+      console.log("--------------------------\n");
     });
   }
 }
