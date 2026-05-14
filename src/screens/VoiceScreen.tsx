@@ -22,11 +22,13 @@ const log = (event: string, detail?: any) => {
 
 // ─── David opening greetings (natural, warm, brief) ────────────────────────
 const DAVID_OPENING_GREETINGS = [
-  "Hey… I'm here with you. What's been on your heart today?",
-  "I'm listening. What's going on?",
-  "You have my full attention. What's weighing on you?",
-  "I'm here. Tell me what's on your mind.",
-  "Take your time. I'm right here with you.",
+  "Hey… I'm here with you. How are you feeling today?",
+  "Hmm… what's been weighing on your heart lately?",
+  "Hey… talk to me. What's on your mind?",
+  "I'm listening. Take your time.",
+  "What's been going on with you?",
+  "Hey… how are you really doing?",
+  "You know… I'm here if you want to talk.",
 ];
 
 // ─── David personality prompt ────────────────────────────────────────────────
@@ -235,17 +237,30 @@ export default function VoiceScreen({ route, navigation }: any) {
 
   // ── Handle voice input (transcript → AI → TTS) ────────────────────────────
   const handleVoiceInput = async (text: string) => {
-    if (!text.trim()) {
-      addLog('Empty transcript — ignoring');
-      if (isConnectedRef.current && conversationState === 'processing') {
+    // Validate input
+    if (!text || !text.trim()) {
+      addLog('Empty transcript — restarting mic');
+      setConversationState('listening');
+      if (isConnectedRef.current) {
         setTimeout(() => startListening(), 300);
       }
       return;
     }
 
-    log('Transcript received', text);
+    // Prevent processing empty or duplicate transcripts
+    const trimmedText = text.trim();
+    if (trimmedText.length < 2) {
+      addLog('Transcript too short — restarting mic');
+      setConversationState('listening');
+      if (isConnectedRef.current) {
+        setTimeout(() => startListening(), 300);
+      }
+      return;
+    }
 
-    const newUserMessage: ChatMessage = { role: 'user', content: text };
+    log('Transcript received', trimmedText);
+
+    const newUserMessage: ChatMessage = { role: 'user', content: trimmedText };
     setMessages(prev => [...prev, newUserMessage]);
     setIsDavidThinking(true);
     setConversationState('processing');
@@ -258,10 +273,24 @@ export default function VoiceScreen({ route, navigation }: any) {
 
       log('AI request sent', `history length: ${history.length}`);
       
-      // Natural delay (1-2 seconds) before response starts
-      await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 1000));
+      // David takes a moment to reflect (1.5-2.5 seconds) before responding
+      // This simulates human-like thinking and makes the conversation feel more natural
+      const reflectionDelay = 1500 + Math.random() * 1000;
+      await new Promise(resolve => setTimeout(resolve, reflectionDelay));
       
       const response = await getChatResponse(history, profile?.preferred_response_length || 'short');
+      
+      // Validate response
+      if (!response || !response.trim()) {
+        addLog('Empty AI response — restarting mic');
+        setIsDavidThinking(false);
+        setConversationState('listening');
+        if (isConnectedRef.current) {
+          setTimeout(() => startListening(), 500);
+        }
+        return;
+      }
+      
       log('AI response received', response.substring(0, 80) + (response.length > 80 ? '…' : ''));
 
       setIsDavidThinking(false);
