@@ -20,6 +20,15 @@ const log = (event: string, detail?: any) => {
   return msg;
 };
 
+// ─── David opening greetings (natural, warm, brief) ────────────────────────
+const DAVID_OPENING_GREETINGS = [
+  "Hey… I'm here with you. What's been on your heart today?",
+  "I'm listening. What's going on?",
+  "You have my full attention. What's weighing on you?",
+  "I'm here. Tell me what's on your mind.",
+  "Take your time. I'm right here with you.",
+];
+
 // ─── David personality prompt ────────────────────────────────────────────────
 // Kept here as a reference — the authoritative copy lives in api/chat.ts (Vercel)
 // and server.ts (local dev). Both are kept in sync.
@@ -27,10 +36,18 @@ const log = (event: string, detail?: any) => {
 export default function VoiceScreen({ route, navigation }: any) {
   const { profile } = useUser();
 
+  // ── Conversation state machine ────────────────────────────────────────────
+  // idle: not connected
+  // starting: connecting but not yet listening
+  // listening: mic is active, waiting for user speech
+  // processing: transcribing or AI is thinking
+  // speaking: David is speaking
+  // ended: session closed
+  const [conversationState, setConversationState] = useState<'idle' | 'starting' | 'listening' | 'processing' | 'speaking' | 'ended'>('idle');
+
   // ── UI state ──────────────────────────────────────────────────────────────
   const [isConnecting, setIsConnecting]     = useState(false);
   const [isConnected, setIsConnected]       = useState(false);
-  const [isListening, setIsListening]       = useState(false);
   const [isDavidThinking, setIsDavidThinking] = useState(false);
   const [isDavidSpeaking, setIsDavidSpeaking] = useState(false);
   const [hasKey, setHasKey]                 = useState(true);
@@ -54,6 +71,11 @@ export default function VoiceScreen({ route, navigation }: any) {
   // Retry tracking for speech recognition network errors
   const micRetryCountRef    = useRef(0);
   const MAX_MIC_RETRIES     = 1; // Show text fallback after 1 network failure (network errors are persistent)
+  // Silence detection for automatic speech-end detection
+  const audioProcessorRef   = useRef<ScriptProcessorNode | null>(null);
+  const silenceTimeoutRef   = useRef<NodeJS.Timeout | null>(null);
+  const SILENCE_THRESHOLD   = 0.01; // RMS threshold for silence
+  const SILENCE_DURATION    = 1500; // milliseconds of silence to trigger stop
 
   // ── Logging helper (also pushes to on-screen debug panel) ────────────────
   const addLog = (msg: string) => {
@@ -103,10 +125,9 @@ export default function VoiceScreen({ route, navigation }: any) {
   };
 
   // ── Start session ─────────────────────────────────────────────────────────
-  // Pressing "Start Conversation" ONLY activates the microphone.
-  // David does NOT speak first — he waits for the user.
+  // Pressing "Start Conversation" activates the microphone and plays David's opening greeting.
   const startSession = async () => {
-    log('Talk button pressed');
+    log('Start Conversation button pressed');
 
     if (!hasProAccess(profile)) {
       alert('Voice chat is a Pro feature. Please upgrade to access.');
@@ -117,29 +138,97 @@ export default function VoiceScreen({ route, navigation }: any) {
     unlockAudioContext();
 
     setIsConnecting(true);
+    setConversationState('starting');
     setMessages([]);
     setError(null);
     setIsDavidThinking(false);
     setIsDavidSpeaking(false);
     isDavidSpeakingRef.current = false;
 
-    addLog('Starting David voice session — mic only, no auto-greeting');
+    addLog('Starting David voice session with opening greeting');
 
     try {
       isConnectedRef.current = true;
       setIsConnected(true);
-      setIsConnecting(false);
 
-      // Small delay to let React flush state before starting the mic
-      setTimeout(() => {
-        log('Mic activation triggered after session start');
-        startListening();
-      }, 150);
+      // Play David's opening greeting
+      const greeting = DAVID_OPENING_GREETINGS[Math.floor(Math.random() * DAVID_OPENING_GREETINGS.length)];
+      log('Playing opening greeting', greeting);
+      
+      setIsDavidSpeaking(true);
+      isDavidSpeakingRef.current = true;
+      setConversationState('speaking');
+
+      try {
+        const audioUrl = await generateSpeech(greeting);
+        if (audioUrl) {
+          const audio = new Audio(audioUrl);
+          currentAudioRef.current = audio;
+          audio.preload = 'auto';
+
+          audio.onended = () => {
+            log('Opening greeting finished — starting mic');
+            isDavidSpeakingRef.current = false;
+            setIsDavidSpeaking(false);
+            URL.revokeObjectURL(audioUrl);
+            currentAudioRef.current = null;
+            setConversationState('listening');
+            setIsConnecting(false);
+            
+            // Add David's greeting as first assistant message
+            setMessages([{ role: 'assistant', content: greeting }]);
+            
+            // Now start listening for user input
+            setTimeout(() => startListening(), 300);
+          };
+
+          audio.onerror = () => {
+            log('Opening greeting audio error — starting mic anyway');
+            isDavidSpeakingRef.current = false;
+            setIsDavidSpeaking(false);
+            currentAudioRef.current = null;
+            setConversationState('listening');
+            setIsConnecting(false);
+            setMessages([{ role: 'assistant', content: greeting }]);
+            setTimeout(() => startListening(), 300);
+          };
+
+          const playPromise = audio.play();
+          if (playPromise !== undefined) {
+            playPromise.catch((playErr: any) => {
+              log('Opening greeting play() rejected', playErr?.message);
+              isDavidSpeakingRef.current = false;
+              setIsDavidSpeaking(false);
+              currentAudioRef.current = null;
+              setConversationState('listening');
+              setIsConnecting(false);
+              setMessages([{ role: 'assistant', content: greeting }]);
+              setTimeout(() => startListening(), 300);
+            });
+          }
+        } else {
+          // TTS failed, skip greeting and start listening
+          log('Opening greeting TTS failed — starting mic without greeting');
+          isDavidSpeakingRef.current = false;
+          setIsDavidSpeaking(false);
+          setConversationState('listening');
+          setIsConnecting(false);
+          setTimeout(() => startListening(), 300);
+        }
+      } catch (err: any) {
+        log('Opening greeting error', err?.message);
+        isDavidSpeakingRef.current = false;
+        setIsDavidSpeaking(false);
+        setConversationState('listening');
+        setIsConnecting(false);
+        setTimeout(() => startListening(), 300);
+      }
 
     } catch (err: any) {
       addLog(`Session start error: ${err?.message}`);
       setError(`Failed to start: ${err?.message}`);
       setIsConnecting(false);
+      setConversationState('idle');
       isConnectedRef.current = false;
     }
   };
@@ -148,6 +237,9 @@ export default function VoiceScreen({ route, navigation }: any) {
   const handleVoiceInput = async (text: string) => {
     if (!text.trim()) {
       addLog('Empty transcript — ignoring');
+      if (isConnectedRef.current && conversationState === 'processing') {
+        setTimeout(() => startListening(), 300);
+      }
       return;
     }
 
@@ -156,6 +248,7 @@ export default function VoiceScreen({ route, navigation }: any) {
     const newUserMessage: ChatMessage = { role: 'user', content: text };
     setMessages(prev => [...prev, newUserMessage]);
     setIsDavidThinking(true);
+    setConversationState('processing');
 
     try {
       const history = [
@@ -180,6 +273,7 @@ export default function VoiceScreen({ route, navigation }: any) {
     } catch (err: any) {
       addLog(`AI chat error: ${err?.message}`);
       setIsDavidThinking(false);
+      setConversationState('listening');
       // Restart listening even after AI error so the session stays alive
       if (isConnectedRef.current) {
         setTimeout(() => startListening(), 500);
@@ -197,6 +291,7 @@ export default function VoiceScreen({ route, navigation }: any) {
 
     isDavidSpeakingRef.current = true;
     setIsDavidSpeaking(true);
+    setConversationState('speaking');
     setError(null);
 
     log('TTS request sent', `${text.length} chars`);
@@ -209,6 +304,7 @@ export default function VoiceScreen({ route, navigation }: any) {
         addLog('TTS failed: no audio URL returned from /api/speech');
         isDavidSpeakingRef.current = false;
         setIsDavidSpeaking(false);
+        setConversationState('listening');
         setError("David's voice is unavailable right now. Check the ElevenLabs API key.");
         if (isConnectedRef.current) setTimeout(() => startListening(), 500);
         return;
@@ -235,6 +331,7 @@ export default function VoiceScreen({ route, navigation }: any) {
         log('Audio playback ended — restarting mic');
         isDavidSpeakingRef.current = false;
         setIsDavidSpeaking(false);
+        setConversationState('listening');
         URL.revokeObjectURL(audioUrl);
         currentAudioRef.current = null;
         if (isConnectedRef.current) {
@@ -248,6 +345,7 @@ export default function VoiceScreen({ route, navigation }: any) {
         addLog(`Audio playback failed: ${errMsg}`);
         isDavidSpeakingRef.current = false;
         setIsDavidSpeaking(false);
+        setConversationState('listening');
         currentAudioRef.current = null;
         setError("Audio playback failed. This may be a browser autoplay restriction.");
         if (isConnectedRef.current) setTimeout(() => startListening(), 500);
@@ -262,6 +360,7 @@ export default function VoiceScreen({ route, navigation }: any) {
           addLog(`audio.play() blocked: ${playErr?.message}. Try tapping the screen first.`);
           isDavidSpeakingRef.current = false;
           setIsDavidSpeaking(false);
+          setConversationState('listening');
           currentAudioRef.current = null;
           setError("Autoplay blocked. Tap anywhere on the screen and try again.");
           if (isConnectedRef.current) setTimeout(() => startListening(), 500);
@@ -273,14 +372,25 @@ export default function VoiceScreen({ route, navigation }: any) {
       addLog(`TTS exception: ${err?.message}`);
       isDavidSpeakingRef.current = false;
       setIsDavidSpeaking(false);
+      setConversationState('listening');
       setError("David's voice encountered an unexpected error.");
       if (isConnectedRef.current) setTimeout(() => startListening(), 500);
     }
   };
 
+  // ── Silence detection helper ──────────────────────────────────────────────
+  // Calculates RMS (root mean square) of audio samples to detect silence
+  const calculateRMS = (data: Float32Array): number => {
+    let sum = 0;
+    for (let i = 0; i < data.length; i++) {
+      sum += data[i] * data[i];
+    }
+    return Math.sqrt(sum / data.length);
+  };
+
   // ── Speech recognition via OpenAI Whisper (MediaRecorder) ───────────────────
   // Replaces the unreliable browser Web Speech API.
-  // Flow: getUserMedia → MediaRecorder records audio → user taps mic to stop
+  // Flow: getUserMedia → MediaRecorder records audio → automatic silence detection stops recording
   //       → audio blob sent to /api/transcribe (Whisper) → transcript → David responds.
   const startListening = async () => {
     if (isDavidSpeakingRef.current) {
@@ -298,6 +408,12 @@ export default function VoiceScreen({ route, navigation }: any) {
       recognitionRef.current = null;
     }
 
+    // Clear any pending silence timeout
+    if (silenceTimeoutRef.current) {
+      clearTimeout(silenceTimeoutRef.current);
+      silenceTimeoutRef.current = null;
+    }
+
     log('Requesting microphone permission');
     let stream: MediaStream;
     try {
@@ -308,6 +424,7 @@ export default function VoiceScreen({ route, navigation }: any) {
       addLog('Mic permission denied. Use the text box below.');
       setError('Microphone access was denied. Type your message below instead.');
       setShowTextFallback(true);
+      setConversationState('listening');
       return;
     }
 
@@ -328,6 +445,7 @@ export default function VoiceScreen({ route, navigation }: any) {
       addLog(`Could not start recorder: ${err?.message}`);
       setError('Could not start microphone. Try a different browser.');
       stream.getTracks().forEach(t => t.stop());
+      setConversationState('listening');
       return;
     }
 
@@ -335,21 +453,71 @@ export default function VoiceScreen({ route, navigation }: any) {
     recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data); };
 
     recorder.onstart = () => {
-      log('Microphone activated — listening (Whisper mode)');
-      setIsListening(true);
-      addLog('Listening… tap mic to send');
+      log('Microphone activated — listening with silence detection');
+      setConversationState('listening');
+      addLog('Listening…');
       setError(null);
+
+      // Set up silence detection using AudioContext
+      try {
+        const audioContext = audioContextRef.current || new (window.AudioContext || (window as any).webkitAudioContext)();
+        if (!audioContextRef.current) audioContextRef.current = audioContext;
+
+        const analyser = audioContext.createAnalyser();
+        const source = audioContext.createMediaStreamSource(stream);
+        const processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+        analyser.fftSize = 2048;
+        source.connect(analyser);
+        analyser.connect(processor);
+        processor.connect(audioContext.destination);
+
+        audioProcessorRef.current = processor;
+
+        let consecutiveSilenceFrames = 0;
+        const silenceFramesNeeded = Math.ceil(SILENCE_DURATION / (4096 / audioContext.sampleRate / 1000));
+
+        processor.onaudioprocess = (e) => {
+          const dataArray = new Uint8Array(analyser.frequencyBinCount);
+          analyser.getByteFrequencyData(dataArray);
+          
+          // Calculate average frequency magnitude
+          const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
+          
+          if (average < 30) { // Silence threshold in frequency domain
+            consecutiveSilenceFrames++;
+            if (consecutiveSilenceFrames >= silenceFramesNeeded) {
+              log('Silence detected — stopping recording');
+              processor.disconnect();
+              recorder.stop();
+            }
+          } else {
+            consecutiveSilenceFrames = 0;
+          }
+        };
+      } catch (err) {
+        log('Silence detection setup failed', (err as any)?.message);
+        // Continue without silence detection
+      }
     };
 
     recorder.onstop = async () => {
       log('Recording stopped — sending to Whisper');
-      setIsListening(false);
+      setConversationState('processing');
+      addLog('Transcribing with Whisper…');
       stream.getTracks().forEach(t => t.stop());
+
+      // Clean up audio processor
+      if (audioProcessorRef.current) {
+        audioProcessorRef.current.disconnect();
+        audioProcessorRef.current = null;
+      }
 
       if (!isConnectedRef.current) return;
 
       if (chunks.length === 0) {
         addLog('No audio recorded — restarting mic');
+        setConversationState('listening');
         setTimeout(() => startListening(), 300);
         return;
       }
@@ -359,13 +527,13 @@ export default function VoiceScreen({ route, navigation }: any) {
 
       if (audioBlob.size < 1000) {
         addLog('Audio too short — restarting mic');
+        setConversationState('listening');
         setTimeout(() => startListening(), 300);
         return;
       }
 
       setIsDavidThinking(true);
-      addLog('Transcribing with Whisper…');
-      log('TTS request sent (Whisper)', `${audioBlob.size} bytes`);
+      log('Transcription request sent', `${audioBlob.size} bytes`);
 
       try {
         const formData = new FormData();
@@ -389,6 +557,7 @@ export default function VoiceScreen({ route, navigation }: any) {
 
         if (!transcript) {
           addLog('Empty transcript — restarting mic');
+          setConversationState('listening');
           if (isConnectedRef.current) setTimeout(() => startListening(), 300);
           return;
         }
@@ -403,6 +572,7 @@ export default function VoiceScreen({ route, navigation }: any) {
         log('Whisper transcription error', err?.message);
         addLog(`Transcription error: ${err?.message}`);
         setIsDavidThinking(false);
+        setConversationState('listening');
         setError('Could not transcribe audio. Try again.');
         if (isConnectedRef.current) setTimeout(() => startListening(), 1000);
       }
@@ -410,13 +580,13 @@ export default function VoiceScreen({ route, navigation }: any) {
 
     recorder.onerror = (e: any) => {
       log('MediaRecorder error', e?.error?.message || 'unknown');
-      setIsListening(false);
+      setConversationState('listening');
       stream.getTracks().forEach(t => t.stop());
     };
 
     recognitionRef.current = recorder;
 
-    // Record until user taps the mic button (stopListening) or David starts speaking
+    // Record until silence is detected or user ends session
     // Auto-stop after 30 seconds as a safety net
     recorder.start();
     log('MediaRecorder.start() called');
@@ -428,14 +598,6 @@ export default function VoiceScreen({ route, navigation }: any) {
         recorder.stop();
       }
     }, 30000);
-  };
-
-  // ── Stop recording (user taps mic while listening) ────────────────────────
-  const stopListening = () => {
-    if (recognitionRef.current && recognitionRef.current.state === 'recording') {
-      log('User stopped recording');
-      recognitionRef.current.stop();
-    }
   };
 
   // ── Text fallback submit ──────────────────────────────────────────
@@ -452,6 +614,7 @@ export default function VoiceScreen({ route, navigation }: any) {
     log('Session ended by user');
     isConnectedRef.current = false;
     isDavidSpeakingRef.current = false;
+    setConversationState('ended');
 
     if (recognitionRef.current) {
       try { recognitionRef.current.stop(); } catch (e) {}
@@ -461,9 +624,16 @@ export default function VoiceScreen({ route, navigation }: any) {
       try { currentAudioRef.current.pause(); } catch (e) {}
       currentAudioRef.current = null;
     }
+    if (audioProcessorRef.current) {
+      try { audioProcessorRef.current.disconnect(); } catch (e) {}
+      audioProcessorRef.current = null;
+    }
+    if (silenceTimeoutRef.current) {
+      clearTimeout(silenceTimeoutRef.current);
+      silenceTimeoutRef.current = null;
+    }
 
     setIsConnected(false);
-    setIsListening(false);
     setIsDavidSpeaking(false);
     setIsDavidThinking(false);
     // Reset text fallback state
@@ -527,8 +697,8 @@ export default function VoiceScreen({ route, navigation }: any) {
             <MotionView
               initial={{ scale: 0.8, opacity: 0 }}
               animate={{
-                scale: isDavidSpeaking ? [1, 1.4, 1] : isListening ? [1, 1.15, 1] : 1,
-                opacity: isDavidSpeaking ? [0.4, 0.7, 0.4] : isListening ? [0.2, 0.5, 0.2] : 0.1,
+                scale: isDavidSpeaking ? [1, 1.4, 1] : conversationState === 'listening' ? [1, 1.15, 1] : 1,
+                opacity: isDavidSpeaking ? [0.4, 0.7, 0.4] : conversationState === 'listening' ? [0.2, 0.5, 0.2] : 0.1,
               }}
               transition={{
                 duration: isDavidSpeaking ? 0.8 : 2,
@@ -549,16 +719,11 @@ export default function VoiceScreen({ route, navigation }: any) {
 
         <TouchableOpacity
           style={[styles.mainCircle, isConnected && styles.mainActive,
-            isListening && styles.mainListening]}
+            conversationState === 'listening' && styles.mainListening]}
           onPress={() => {
-            if (!isConnected) return;
-            if (isListening) {
-              stopListening();
-            } else if (!isDavidSpeaking && !isDavidThinking) {
-              startListening();
-            }
+            // Mic button is now visual only - no manual send needed
           }}
-          disabled={!isConnected || isDavidSpeaking || isDavidThinking}
+          disabled={true}
           activeOpacity={0.8}
         >
           {isConnected ? (
@@ -572,7 +737,7 @@ export default function VoiceScreen({ route, navigation }: any) {
             ) : isDavidThinking ? (
               <ActivityIndicator color="#d4af37" size="large" />
             ) : (
-                <Mic color={isListening ? '#0b1e3d' : '#fff'} size={40} />
+                <Mic color={conversationState === 'listening' ? '#0b1e3d' : '#fff'} size={40} />
             )
           ) : (
                 <MicOff color="#9CA3AF" size={40} />
@@ -587,10 +752,10 @@ export default function VoiceScreen({ route, navigation }: any) {
             {isDavidSpeaking
               ? 'David is speaking…'
               : isDavidThinking
-              ? 'David is thinking…'
-              : isListening
-              ? 'Tap mic to send'
-              : 'Tap mic to speak'}
+              ? 'David is reflecting…'
+              : conversationState === 'listening'
+              ? 'Listening…'
+              : 'Processing…'}
           </Text>
         </View>
       )}
@@ -626,7 +791,7 @@ export default function VoiceScreen({ route, navigation }: any) {
               style={styles.textInputField}
               value={textInput}
               onChangeText={setTextInput}
-              placeholder="What’s on your mind…"
+              placeholder="What's on your mind…"
               placeholderTextColor="rgba(212, 175, 55, 0.4)"
               onSubmitEditing={handleTextSubmit}
               returnKeyType="send"
@@ -680,7 +845,7 @@ export default function VoiceScreen({ route, navigation }: any) {
           <ActivityIndicator color="#fff" />
         ) : (
           <Text style={styles.actionButtonText}>
-            {isConnected ? 'End Session' : 'Start Conversation'}
+            {isConnected ? 'End Conversation' : 'Start Conversation'}
           </Text>
         )}
       </TouchableOpacity>
