@@ -1,6 +1,9 @@
+import { resolveDavidVoiceId } from '../src/constants/elevenLabsVoice';
+
 export default async function handler(req: any, res: any) {
   const elevenLabsKey = process.env.ELEVENLABS_API_KEY || process.env.ELEVEN_LABS_API_KEY;
-  const elevenLabsVoiceId = process.env.ELEVENLABS_VOICE_ID || process.env.ELEVEN_LABS_VOICE_ID || '9X1Jz0xL6DHvaiD9uzHw (default)';
+  const envVoiceId = process.env.ELEVENLABS_VOICE_ID || process.env.ELEVEN_LABS_VOICE_ID;
+  const elevenLabsVoiceId = resolveDavidVoiceId(envVoiceId);
 
   res.status(200).json({
     status: "ok",

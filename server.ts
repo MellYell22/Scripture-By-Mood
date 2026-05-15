@@ -8,6 +8,10 @@ import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
 import { DAVID_PERSONALITY_PROMPT, DAVID_CHAT_TEMPERATURE } from './src/constants/davidPersona';
 import { prepareDavidTtsPayload } from './src/utils/davidSpeechDelivery';
+import {
+  DAVID_ELEVENLABS_VOICE_ID,
+  resolveDavidVoiceId,
+} from './src/constants/elevenLabsVoice';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -269,7 +273,8 @@ app.post("/api/stripe-webhook", async (req: any, res) => {
 // API Routes
 app.get("/api/health", (req, res) => {
   const elevenLabsKey = process.env.ELEVENLABS_API_KEY || process.env.ELEVEN_LABS_API_KEY;
-  const elevenLabsVoiceId = process.env.ELEVENLABS_VOICE_ID || process.env.ELEVEN_LABS_VOICE_ID || '9X1Jz0xL6DHvaiD9uzHw (default)';
+  const envVoiceId = process.env.ELEVENLABS_VOICE_ID || process.env.ELEVEN_LABS_VOICE_ID;
+  const elevenLabsVoiceId = resolveDavidVoiceId(envVoiceId);
   res.json({ 
     status: "ok", 
     stripeConfigured: !!getStripe(),
@@ -523,9 +528,11 @@ app.post("/api/speech", async (req, res) => {
       throw new Error("ElevenLabs API Key is not configured.");
     }
 
-    // Use custom David voice ID with env var fallback
-    const defaultVoiceId = '9X1Jz0xL6DHvaiD9uzHw'; // Custom David voice
-    const VOICE_ID = process.env.ELEVENLABS_VOICE_ID || process.env.ELEVEN_LABS_VOICE_ID || defaultVoiceId;
+    const envVoiceId = process.env.ELEVENLABS_VOICE_ID || process.env.ELEVEN_LABS_VOICE_ID;
+    let VOICE_ID = resolveDavidVoiceId(envVoiceId);
+    if (envVoiceId?.trim() && envVoiceId.trim() !== VOICE_ID) {
+      console.warn(`[ElevenLabs] Deprecated ELEVENLABS_VOICE_ID "${envVoiceId}" — using ${VOICE_ID}`);
+    }
     // eleven_flash_v2_5 is ElevenLabs' lowest-latency model (~75ms vs ~200ms for turbo)
     const alreadySsml = /<speak[\s>]/i.test(text);
     const ttsPayload = alreadySsml
@@ -534,31 +541,47 @@ app.post("/api/speech", async (req, res) => {
         ? { ssmlText: text, enableSsmlParsing: true }
         : prepareDavidTtsPayload(text, { force: true });
 
-    const url = `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}?optimize_streaming_latency=4&output_format=mp3_22050_32`;
-
-    const response = await fetch(url, {
-      method: "POST",
-      headers: {
-        "Accept": "audio/mpeg",
-        "Content-Type": "application/json",
-        "xi-api-key": elevenLabsApiKey,
-      },
-      body: JSON.stringify({
-        text: ttsPayload.ssmlText,
-        model_id: "eleven_flash_v2_5",
-        enable_ssml_parsing: ttsPayload.enableSsmlParsing,
-        voice_settings: {
-          stability: 0.45,
-          similarity_boost: 0.75,
-          style: 0.0,
-          use_speaker_boost: false,
+    const synthesize = (voiceId: string) =>
+      fetch(
+        `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?optimize_streaming_latency=4&output_format=mp3_22050_32`,
+        {
+          method: "POST",
+          headers: {
+            "Accept": "audio/mpeg",
+            "Content-Type": "application/json",
+            "xi-api-key": elevenLabsApiKey,
+          },
+          body: JSON.stringify({
+            text: ttsPayload.ssmlText,
+            model_id: "eleven_flash_v2_5",
+            enable_ssml_parsing: ttsPayload.enableSsmlParsing,
+            voice_settings: {
+              stability: 0.45,
+              similarity_boost: 0.75,
+              style: 0.0,
+              use_speaker_boost: false,
+            },
+          }),
         },
-      }),
-    });
+      );
+
+    let response = await synthesize(VOICE_ID);
 
     if (!response.ok) {
-      const errorText = await response.text();
-      throw new Error(`ElevenLabs API Error: ${response.status} - ${errorText}`);
+      let errorText = await response.text();
+      if (
+        response.status === 404
+        && VOICE_ID !== DAVID_ELEVENLABS_VOICE_ID
+        && /voice_not_found/i.test(errorText)
+      ) {
+        console.warn(`[ElevenLabs] Voice ${VOICE_ID} not found — retrying with ${DAVID_ELEVENLABS_VOICE_ID}`);
+        VOICE_ID = DAVID_ELEVENLABS_VOICE_ID;
+        response = await synthesize(VOICE_ID);
+        if (!response.ok) errorText = await response.text();
+      }
+      if (!response.ok) {
+        throw new Error(`ElevenLabs API Error: ${response.status} - ${errorText}`);
+      }
     }
 
     const arrayBuffer = await response.arrayBuffer();

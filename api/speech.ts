@@ -1,4 +1,8 @@
 import { prepareDavidTtsPayload } from '../src/utils/davidSpeechDelivery';
+import {
+  DAVID_ELEVENLABS_VOICE_ID,
+  resolveDavidVoiceId,
+} from '../src/constants/elevenLabsVoice';
 
 export default async function handler(req: any, res: any) {
   // CORS headers if needed
@@ -36,10 +40,11 @@ export default async function handler(req: any, res: any) {
     // Log key presence without leaking the value
     console.log(`[Speech API] API Key found. Length: ${apiKey.length}, Starts with: ${apiKey.substring(0, 3)}...`);
 
-    // 2. Resolve Voice ID with fallbacks (Default to Adam if none provided)
-    const defaultVoiceId = '9X1Jz0xL6DHvaiD9uzHw'; // Custom David voice
-    const voiceId = process.env.ELEVENLABS_VOICE_ID || process.env.ELEVEN_LABS_VOICE_ID || defaultVoiceId;
-    
+    const envVoiceId = process.env.ELEVENLABS_VOICE_ID || process.env.ELEVEN_LABS_VOICE_ID;
+    let voiceId = resolveDavidVoiceId(envVoiceId);
+    if (envVoiceId?.trim() && envVoiceId.trim() !== voiceId) {
+      console.warn(`[Speech API] Deprecated ELEVENLABS_VOICE_ID "${envVoiceId}" — using ${voiceId}`);
+    }
     console.log(`[Speech API] Using Voice ID: ${voiceId}`);
 
     // Apply SSML delivery unless client already sent SSML or plain safety text
@@ -54,28 +59,42 @@ export default async function handler(req: any, res: any) {
       console.log('[Speech API] SSML delivery enabled (prosody + breaks)');
     }
 
-    const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?optimize_streaming_latency=4&output_format=mp3_22050_32`;
-    console.log(`[Speech API] Calling ElevenLabs: ${url}`);
-
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Accept': 'audio/mpeg',
-        'Content-Type': 'application/json',
-        'xi-api-key': apiKey,
-      },
-      body: JSON.stringify({
-        text: ttsPayload.ssmlText,
-        model_id: 'eleven_flash_v2_5',
-        enable_ssml_parsing: ttsPayload.enableSsmlParsing,
-        voice_settings: {
-          stability: 0.45,
-          similarity_boost: 0.75,
-          style: 0.0,
-          use_speaker_boost: false,
+    const synthesize = (id: string) =>
+      fetch(`https://api.elevenlabs.io/v1/text-to-speech/${id}?optimize_streaming_latency=4&output_format=mp3_22050_32`, {
+        method: 'POST',
+        headers: {
+          'Accept': 'audio/mpeg',
+          'Content-Type': 'application/json',
+          'xi-api-key': apiKey,
         },
-      }),
-    });
+        body: JSON.stringify({
+          text: ttsPayload.ssmlText,
+          model_id: 'eleven_flash_v2_5',
+          enable_ssml_parsing: ttsPayload.enableSsmlParsing,
+          voice_settings: {
+            stability: 0.45,
+            similarity_boost: 0.75,
+            style: 0.0,
+            use_speaker_boost: false,
+          },
+        }),
+      });
+
+    let response = await synthesize(voiceId);
+
+    // Retry once with default David voice if env voice ID is invalid
+    if (
+      !response.ok
+      && response.status === 404
+      && voiceId !== DAVID_ELEVENLABS_VOICE_ID
+    ) {
+      const errText = await response.text();
+      if (/voice_not_found/i.test(errText)) {
+        console.warn(`[Speech API] Voice ${voiceId} not found — retrying with ${DAVID_ELEVENLABS_VOICE_ID}`);
+        voiceId = DAVID_ELEVENLABS_VOICE_ID;
+        response = await synthesize(voiceId);
+      }
+    }
 
     // 4. Handle ElevenLabs errors explicitly
     if (!response.ok) {
