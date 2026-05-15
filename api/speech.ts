@@ -1,3 +1,5 @@
+import { prepareDavidTtsPayload } from '../src/utils/davidSpeechDelivery';
+
 export default async function handler(req: any, res: any) {
   // CORS headers if needed
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -13,7 +15,7 @@ export default async function handler(req: any, res: any) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { text } = req.body;
+  const { text, enable_ssml_parsing: clientSsmlFlag } = req.body;
 
   if (!text) {
     console.warn('[Speech API] Missing text parameter');
@@ -40,11 +42,21 @@ export default async function handler(req: any, res: any) {
     
     console.log(`[Speech API] Using Voice ID: ${voiceId}`);
 
-    // eleven_flash_v2_5 is ElevenLabs' lowest-latency model (~75ms vs ~200ms for turbo)
+    // Apply SSML delivery unless client already sent SSML or plain safety text
+    const alreadySsml = /<speak[\s>]/i.test(text);
+    const ttsPayload = alreadySsml
+      ? { ssmlText: text, enableSsmlParsing: clientSsmlFlag !== false }
+      : clientSsmlFlag === true && text.includes('<break')
+        ? { ssmlText: text, enableSsmlParsing: true }
+        : prepareDavidTtsPayload(text, { force: true });
+
+    if (ttsPayload.enableSsmlParsing) {
+      console.log('[Speech API] SSML delivery enabled (prosody + breaks)');
+    }
+
     const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?optimize_streaming_latency=4&output_format=mp3_22050_32`;
     console.log(`[Speech API] Calling ElevenLabs: ${url}`);
 
-    // 3. Make the API call
     const response = await fetch(url, {
       method: 'POST',
       headers: {
@@ -53,13 +65,14 @@ export default async function handler(req: any, res: any) {
         'xi-api-key': apiKey,
       },
       body: JSON.stringify({
-        text,
-        model_id: 'eleven_flash_v2_5', // fastest ElevenLabs model (~75ms latency)
+        text: ttsPayload.ssmlText,
+        model_id: 'eleven_flash_v2_5',
+        enable_ssml_parsing: ttsPayload.enableSsmlParsing,
         voice_settings: {
           stability: 0.45,
           similarity_boost: 0.75,
-          style: 0.0, // style=0 removes processing overhead
-          use_speaker_boost: false // speaker_boost adds latency, disable for speed
+          style: 0.0,
+          use_speaker_boost: false,
         },
       }),
     });

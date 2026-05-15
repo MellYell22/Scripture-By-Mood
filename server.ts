@@ -7,6 +7,7 @@ import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
 import { DAVID_PERSONALITY_PROMPT, DAVID_CHAT_TEMPERATURE } from './src/constants/davidPersona';
+import { prepareDavidTtsPayload } from './src/utils/davidSpeechDelivery';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -514,7 +515,7 @@ app.post("/api/transcribe", express.raw({ type: '*/*', limit: '25mb' }), async (
 });
 
 app.post("/api/speech", async (req, res) => {
-  const { text } = req.body;
+  const { text, enable_ssml_parsing: clientSsmlFlag } = req.body;
 
   try {
     const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY || process.env.ELEVEN_LABS_API_KEY;
@@ -526,6 +527,13 @@ app.post("/api/speech", async (req, res) => {
     const defaultVoiceId = '9X1Jz0xL6DHvaiD9uzHw'; // Custom David voice
     const VOICE_ID = process.env.ELEVENLABS_VOICE_ID || process.env.ELEVEN_LABS_VOICE_ID || defaultVoiceId;
     // eleven_flash_v2_5 is ElevenLabs' lowest-latency model (~75ms vs ~200ms for turbo)
+    const alreadySsml = /<speak[\s>]/i.test(text);
+    const ttsPayload = alreadySsml
+      ? { ssmlText: text, enableSsmlParsing: clientSsmlFlag !== false }
+      : clientSsmlFlag === true && text.includes('<break')
+        ? { ssmlText: text, enableSsmlParsing: true }
+        : prepareDavidTtsPayload(text, { force: true });
+
     const url = `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}?optimize_streaming_latency=4&output_format=mp3_22050_32`;
 
     const response = await fetch(url, {
@@ -536,13 +544,14 @@ app.post("/api/speech", async (req, res) => {
         "xi-api-key": elevenLabsApiKey,
       },
       body: JSON.stringify({
-        text: text,
-        model_id: "eleven_flash_v2_5", // fastest ElevenLabs model (~75ms latency)
+        text: ttsPayload.ssmlText,
+        model_id: "eleven_flash_v2_5",
+        enable_ssml_parsing: ttsPayload.enableSsmlParsing,
         voice_settings: {
           stability: 0.45,
           similarity_boost: 0.75,
-          style: 0.0, // style=0 removes processing overhead
-          use_speaker_boost: false, // speaker_boost adds latency, disable for speed
+          style: 0.0,
+          use_speaker_boost: false,
         },
       }),
     });

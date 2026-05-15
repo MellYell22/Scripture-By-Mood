@@ -1,5 +1,5 @@
 import { MoodResponse, ResponseLength, Scripture } from "../types";
-import { humanizeForTts } from "../utils/davidSpeechDelivery";
+import { prepareDavidTtsPayload } from "../utils/davidSpeechDelivery";
 
 export type GenerateSpeechOptions = {
   isGreeting?: boolean;
@@ -182,14 +182,18 @@ export const generateSpeech = async (
   text: string,
   options: GenerateSpeechOptions = {},
 ): Promise<string | null> => {
-  const spokenText = options.skipHumanize
-    ? text.trim()
-    : humanizeForTts(text, { isGreeting: options.isGreeting });
+  const { ssmlText, enableSsmlParsing } = prepareDavidTtsPayload(text, {
+    isGreeting: options.isGreeting,
+    force: options.skipHumanize,
+  });
   try {
     const response = await fetch('/api/speech', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text: spokenText })
+      body: JSON.stringify({
+        text: ssmlText,
+        enable_ssml_parsing: enableSsmlParsing,
+      }),
     });
 
     if (!response.ok) return null;

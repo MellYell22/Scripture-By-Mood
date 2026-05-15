@@ -1,10 +1,23 @@
 /**
- * Adds subtle human rhythm to text before ElevenLabs TTS.
- * Display text and spoken text should both use the same output.
+ * Human rhythm (plain text) + ElevenLabs SSML delivery (audio only).
+ * UI/message history uses displayText; TTS uses ssmlText.
  */
 
+/** Matches pastor-presence delivery: slightly slower, grounded pitch */
+export const DAVID_SSML_PROSODY = {
+  rate: '91%',
+  pitch: '-1st',
+} as const;
+
+/** Break after thinking fillers (mm…, yeah…, etc.) */
+export const SSML_BREAK_AFTER_FILLER_S = 0.35;
+export const SSML_BREAK_ELLIPSIS_S = 0.3;
+export const SSML_BREAK_CLAUSE_S = 0.2;
+
 const CONVERSATIONAL_PREFIXES = ['mm…', 'yeah…', 'hm.', 'alright…', 'heh.'];
-const SOFT_OPENING_BREATH = '…'; // rare — implies inhale before speaking
+const SOFT_OPENING_BREATH = '…';
+
+const SAFETY_PLAIN_SPEECH = /emergency|crisis|988|self[- ]?harm|suicide|call 911|danger right now/i;
 
 export type HumanizeOptions = {
   /** Opening session line — slightly more texture, still subtle */
@@ -71,6 +84,80 @@ export function humanizeForTts(text: string, options: HumanizeOptions = {}): str
   }
 
   return t.replace(/\s+/g, ' ').trim();
+}
+
+function escapeXml(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * Wrap plain text in ElevenLabs SSML — prosody + breaks for natural pacing.
+ * Example: mm… <break/> that's a heavy thing to carry.
+ */
+export function toElevenLabsSsml(plainText: string): string {
+  const trimmed = plainText.trim();
+  if (!trimmed) return trimmed;
+  if (/<speak[\s>]/i.test(trimmed)) return trimmed;
+
+  let inner = escapeXml(trimmed);
+
+  // Filler + ellipsis → pause (thinking before continuing)
+  inner = inner.replace(
+    /^(mm|hm|yeah|alright|heh)(…|\.{3}|\.)\s*/i,
+    `$1$2 <break time="${SSML_BREAK_AFTER_FILLER_S}s"/> `,
+  );
+
+  // Mid-sentence ellipsis
+  inner = inner.replace(/(…|\.{3})\s+/g, `<break time="${SSML_BREAK_ELLIPSIS_S}s"/> `);
+
+  // Em dash / clause breath
+  inner = inner.replace(/\s*—\s*/g, ` <break time="${SSML_BREAK_CLAUSE_S}s"/> `);
+
+  // Short pause after sentence end before next thought (not every period)
+  inner = inner.replace(
+    /\.(\s+)(?=[a-z])/g,
+    `.<break time="${SSML_BREAK_CLAUSE_S}s"/>$1`,
+  );
+
+  return (
+    `<speak><prosody rate="${DAVID_SSML_PROSODY.rate}" pitch="${DAVID_SSML_PROSODY.pitch}">` +
+    `${inner}</prosody></speak>`
+  );
+}
+
+export type PrepareTtsResult = {
+  /** Shown in chat / logs — no SSML tags */
+  displayText: string;
+  /** Sent to ElevenLabs */
+  ssmlText: string;
+  enableSsmlParsing: boolean;
+};
+
+/** Humanize plain text, then build SSML payload for synthesis. */
+export function prepareDavidTtsPayload(
+  text: string,
+  options: HumanizeOptions = {},
+): PrepareTtsResult {
+  const displayText = options.force ? text.trim() : humanizeForTts(text, options);
+  const usePlainSpeech = SAFETY_PLAIN_SPEECH.test(displayText);
+
+  if (usePlainSpeech) {
+    return {
+      displayText,
+      ssmlText: displayText,
+      enableSsmlParsing: false,
+    };
+  }
+
+  return {
+    displayText,
+    ssmlText: toElevenLabsSsml(displayText),
+    enableSsmlParsing: true,
+  };
 }
 
 /** Brief pause before audio — simulates someone gathering thought (voice only) */
