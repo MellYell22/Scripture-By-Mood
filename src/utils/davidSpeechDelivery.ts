@@ -94,6 +94,11 @@ function escapeXml(text: string): string {
     .replace(/"/g, '&quot;');
 }
 
+/** True when text is already a full ElevenLabs SSML document */
+export function isAlreadyElevenLabsSsml(text: string): boolean {
+  return /^\s*<speak[\s>]/i.test(text);
+}
+
 /**
  * Wrap plain text in ElevenLabs SSML — prosody + breaks for natural pacing.
  * Example: mm… <break/> that's a heavy thing to carry.
@@ -101,7 +106,7 @@ function escapeXml(text: string): string {
 export function toElevenLabsSsml(plainText: string): string {
   const trimmed = plainText.trim();
   if (!trimmed) return trimmed;
-  if (/<speak[\s>]/i.test(trimmed)) return trimmed;
+  if (isAlreadyElevenLabsSsml(trimmed)) return trimmed;
 
   let inner = escapeXml(trimmed);
 
@@ -150,6 +155,14 @@ export function prepareDavidTtsPayload(
       displayText,
       ssmlText: displayText,
       enableSsmlParsing: false,
+    };
+  }
+
+  if (isAlreadyElevenLabsSsml(displayText)) {
+    return {
+      displayText,
+      ssmlText: displayText.trim(),
+      enableSsmlParsing: true,
     };
   }
 

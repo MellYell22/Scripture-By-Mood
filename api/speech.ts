@@ -1,4 +1,4 @@
-import { prepareDavidTtsPayload } from '../src/utils/davidSpeechDelivery';
+import { isAlreadyElevenLabsSsml, prepareDavidTtsPayload } from '../src/utils/davidSpeechDelivery';
 import { resolveDavidVoiceId } from '../src/constants/elevenLabsVoice';
 
 export default async function handler(req: any, res: any) {
@@ -16,12 +16,17 @@ export default async function handler(req: any, res: any) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { text, enable_ssml_parsing: clientSsmlFlag } = req.body;
+  const { text, enable_ssml_parsing: clientSsmlFlag } = req.body ?? {};
 
-  if (!text) {
-    console.warn('[Speech API] Missing text parameter');
+  if (!text || typeof text !== 'string' || text.trim().length === 0) {
+    console.warn('[Speech API] Invalid text parameter', {
+      type: typeof text,
+      length: typeof text === 'string' ? text.length : 0,
+    });
     return res.status(400).json({ error: 'Missing text parameter' });
   }
+
+  const trimmedText = text.trim();
 
   try {
     // 1. Resolve API Key with fallbacks
@@ -42,13 +47,12 @@ export default async function handler(req: any, res: any) {
     );
     console.log(`[Speech API] Using Voice ID: ${voiceId}`);
 
-    // Apply SSML delivery unless client already sent SSML or plain safety text
-    const alreadySsml = /<speak[\s>]/i.test(text);
+    const alreadySsml = isAlreadyElevenLabsSsml(trimmedText);
     const ttsPayload = alreadySsml
-      ? { ssmlText: text, enableSsmlParsing: clientSsmlFlag !== false }
-      : clientSsmlFlag === true && text.includes('<break')
-        ? { ssmlText: text, enableSsmlParsing: true }
-        : prepareDavidTtsPayload(text, { force: true });
+      ? { ssmlText: trimmedText, enableSsmlParsing: clientSsmlFlag !== false }
+      : clientSsmlFlag === true && trimmedText.includes('<break')
+        ? { ssmlText: trimmedText, enableSsmlParsing: true }
+        : prepareDavidTtsPayload(trimmedText, { force: true });
 
     if (ttsPayload.enableSsmlParsing) {
       console.log('[Speech API] SSML delivery enabled (prosody + breaks)');
@@ -113,8 +117,9 @@ export default async function handler(req: any, res: any) {
     // 4. Handle ElevenLabs errors explicitly
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`[Speech API] ElevenLabs API Error: Status ${response.status}`);
-      console.error(`[Speech API] ElevenLabs Response Body: ${errorText}`);
+      console.error(
+        `[Speech API] ElevenLabs failed status=${response.status} body=${errorText.substring(0, 500)}`,
+      );
       
       let parsedError = errorText;
       let userMessage = `ElevenLabs API Error (${response.status})`;

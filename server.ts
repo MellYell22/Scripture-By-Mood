@@ -7,7 +7,7 @@ import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
 import { DAVID_PERSONALITY_PROMPT, DAVID_CHAT_TEMPERATURE } from './src/constants/davidPersona';
-import { prepareDavidTtsPayload } from './src/utils/davidSpeechDelivery';
+import { isAlreadyElevenLabsSsml, prepareDavidTtsPayload } from './src/utils/davidSpeechDelivery';
 import { resolveDavidVoiceId } from './src/constants/elevenLabsVoice';
 
 const __filename = fileURLToPath(import.meta.url);
@@ -517,26 +517,40 @@ app.post("/api/transcribe", express.raw({ type: '*/*', limit: '25mb' }), async (
 });
 
 app.post("/api/speech", async (req, res) => {
-  const { text, enable_ssml_parsing: clientSsmlFlag } = req.body;
+  const { text, enable_ssml_parsing: clientSsmlFlag } = req.body ?? {};
+
+  if (!text || typeof text !== 'string' || text.trim().length === 0) {
+    console.warn('[Speech] Invalid text parameter', {
+      type: typeof text,
+      length: typeof text === 'string' ? text.length : 0,
+    });
+    return res.status(400).json({ error: 'Missing text parameter' });
+  }
+
+  const trimmedText = text.trim();
 
   try {
     const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY || process.env.ELEVEN_LABS_API_KEY;
     if (!elevenLabsApiKey) {
-      throw new Error("ElevenLabs API Key is not configured.");
+      console.error('[Speech] ELEVENLABS_API_KEY is not configured');
+      return res.status(500).json({ error: 'ElevenLabs API Key is not configured.' });
     }
 
     const VOICE_ID = resolveDavidVoiceId(
       process.env.ELEVENLABS_VOICE_ID || process.env.ELEVEN_LABS_VOICE_ID,
     );
-    // eleven_flash_v2_5 is ElevenLabs' lowest-latency model (~75ms vs ~200ms for turbo)
-    const alreadySsml = /<speak[\s>]/i.test(text);
-    const ttsPayload = alreadySsml
-      ? { ssmlText: text, enableSsmlParsing: clientSsmlFlag !== false }
-      : clientSsmlFlag === true && text.includes('<break')
-        ? { ssmlText: text, enableSsmlParsing: true }
-        : prepareDavidTtsPayload(text, { force: true });
 
-    const synthesize = (voiceId: string) =>
+    const alreadySsml = isAlreadyElevenLabsSsml(trimmedText);
+    const ttsPayload = alreadySsml
+      ? { ssmlText: trimmedText, enableSsmlParsing: clientSsmlFlag !== false }
+      : clientSsmlFlag === true && trimmedText.includes('<break')
+        ? { ssmlText: trimmedText, enableSsmlParsing: true }
+        : prepareDavidTtsPayload(trimmedText, { force: true });
+
+    const synthesize = (
+      voiceId: string,
+      payload: { text: string; model_id: string; enable_ssml_parsing: boolean },
+    ) =>
       fetch(
         `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?optimize_streaming_latency=4&output_format=mp3_22050_32`,
         {
@@ -547,9 +561,9 @@ app.post("/api/speech", async (req, res) => {
             "xi-api-key": elevenLabsApiKey,
           },
           body: JSON.stringify({
-            text: ttsPayload.ssmlText,
-            model_id: "eleven_flash_v2_5",
-            enable_ssml_parsing: ttsPayload.enableSsmlParsing,
+            text: payload.text,
+            model_id: payload.model_id,
+            enable_ssml_parsing: payload.enable_ssml_parsing,
             voice_settings: {
               stability: 0.45,
               similarity_boost: 0.75,
@@ -560,21 +574,47 @@ app.post("/api/speech", async (req, res) => {
         },
       );
 
-    const response = await synthesize(VOICE_ID);
+    const primaryPayload = {
+      text: ttsPayload.ssmlText,
+      model_id: "eleven_flash_v2_5",
+      enable_ssml_parsing: ttsPayload.enableSsmlParsing,
+    };
+
+    let response = await synthesize(VOICE_ID, primaryPayload);
+
+    if (!response.ok && [401, 403, 404, 422].includes(response.status)) {
+      const errPreview = await response.text();
+      console.warn(
+        `[Speech] Primary voice ${VOICE_ID} failed (${response.status}): ${errPreview.substring(0, 200)}`,
+      );
+      const FALLBACK_VOICE_ID = 'pNInz6obpgDQGcFmaJgB';
+      console.warn(`[Speech] Retrying with fallback voice: ${FALLBACK_VOICE_ID}`);
+      response = await synthesize(FALLBACK_VOICE_ID, {
+        text: ttsPayload.ssmlText,
+        model_id: 'eleven_monolingual_v1',
+        enable_ssml_parsing: false,
+      });
+    }
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`ElevenLabs API Error: ${response.status} - ${errorText}`);
+      console.error(
+        `[Speech] ElevenLabs failed status=${response.status} body=${errorText.substring(0, 500)}`,
+      );
+      return res.status(response.status).json({
+        error: `ElevenLabs API Error (${response.status})`,
+        details: errorText.substring(0, 500),
+      });
     }
 
     const arrayBuffer = await response.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
-    
+
     res.setHeader('Content-Type', 'audio/mpeg');
     res.send(buffer);
   } catch (error: any) {
-    console.error("[ElevenLabs] Speech error:", error);
-    res.status(500).json({ error: error.message });
+    console.error("[Speech] Unexpected error:", error?.message || error);
+    res.status(500).json({ error: error?.message || 'Speech generation failed' });
   }
 });
 
