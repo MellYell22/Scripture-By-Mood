@@ -110,7 +110,7 @@ export default function VoiceScreen({ route, navigation }: any) {
   const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const silenceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const SILENCE_THRESHOLD = 0.01; // RMS threshold for silence
-  const SILENCE_DURATION = 1500; // milliseconds of silence to trigger stop
+  const SILENCE_DURATION = 700; // ms of silence before treating as end-of-speech (was 1500)
 
   // ── Logging helper (also pushes to on-screen debug panel) ────────────────
   const addLog = (msg: string) => {
@@ -534,7 +534,7 @@ export default function VoiceScreen({ route, navigation }: any) {
 
         const analyser = audioContext.createAnalyser();
         const source = audioContext.createMediaStreamSource(stream);
-        const processor = audioContext.createScriptProcessor(4096, 1, 1);
+        const processor = audioContext.createScriptProcessor(2048, 1, 1); // smaller buffer = faster silence detection
 
         analyser.fftSize = 2048;
         source.connect(analyser);
@@ -544,7 +544,7 @@ export default function VoiceScreen({ route, navigation }: any) {
         audioProcessorRef.current = processor;
 
         let consecutiveSilenceFrames = 0;
-        const silenceFramesNeeded = Math.ceil(SILENCE_DURATION / (4096 / audioContext.sampleRate / 1000));
+        const silenceFramesNeeded = Math.ceil(SILENCE_DURATION / (2048 / audioContext.sampleRate / 1000)); // aligned with 2048 buffer
 
         processor.onaudioprocess = (e) => {
           const dataArray = new Uint8Array(analyser.frequencyBinCount);
@@ -553,7 +553,7 @@ export default function VoiceScreen({ route, navigation }: any) {
           // Calculate average frequency magnitude
           const average = dataArray.reduce((a, b) => a + b) / dataArray.length;
 
-          if (average < 30) { // Silence threshold in frequency domain
+          if (average < 40) { // Silence threshold in frequency domain (raised for faster trigger)
             consecutiveSilenceFrames++;
             if (consecutiveSilenceFrames >= silenceFramesNeeded) {
               log('Silence detected — stopping recording');

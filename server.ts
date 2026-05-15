@@ -556,7 +556,7 @@ app.post("/api/speech", async (req, res) => {
     // Use custom David voice ID with env var fallback
     const defaultVoiceId = '6j5m6aQo2Q3NyLs6PYOz'; // Custom David voice (updated)
     const VOICE_ID = process.env.ELEVENLABS_VOICE_ID || process.env.ELEVEN_LABS_VOICE_ID || defaultVoiceId;
-    const url = `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}?optimize_streaming_latency=3`;
+    const url = `https://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}?optimize_streaming_latency=4`; // max latency optimization
 
     const response = await fetch(url, {
       method: "POST",

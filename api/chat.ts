@@ -103,11 +103,11 @@ export default async function handler(req: any, res: any) {
       res.setHeader('Connection', 'keep-alive');
 
       const completion = await openai.chat.completions.create({
-        model: 'gpt-4o',
+        model: 'gpt-4o-mini', // faster for voice turns
         messages: [systemMessage, ...messages],
         stream: true,
         temperature: 0.9,
-        max_tokens: 250,
+        max_tokens: 120, // voice replies: 1-3 sentences
       });
 
       for await (const chunk of completion) {
@@ -120,10 +120,10 @@ export default async function handler(req: any, res: any) {
       res.end();
     } else {
       const completion = await openai.chat.completions.create({
-        model: 'gpt-4o',
+        model: 'gpt-4o-mini', // faster for voice turns
         messages: [systemMessage, ...messages],
         temperature: 0.9,
-        max_tokens: 250,
+        max_tokens: 120, // voice replies: 1-3 sentences
       });
       const text = completion.choices[0].message.content || '';
       console.log(`[Chat API] Response (${text.length} chars): ${text.substring(0, 100)}…`);
