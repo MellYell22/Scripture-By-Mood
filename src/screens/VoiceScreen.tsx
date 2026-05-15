@@ -17,6 +17,7 @@ import {
   normalizeTranscript,
 } from '../utils/voiceTranscript';
 import { getDavidGreeting, DAVID_ANTI_REPEAT_FALLBACKS } from '../constants/davidPersona';
+import { humanizeForTts, preSpeechThinkingDelay } from '../utils/davidSpeechDelivery';
 
 // ─── Logging ────────────────────────────────────────────────────────────────
 // All voice events are prefixed with [David] for easy filtering in DevTools.
@@ -266,7 +267,7 @@ export default function VoiceScreen({ route, navigation }: any) {
         || cleanFirstName(identityData.given_name)
         || cleanFirstName(identityData.full_name)
         || cleanFirstName(identityData.name);
-      const greeting = getDavidGreeting(firstName);
+      const greeting = humanizeForTts(getDavidGreeting(firstName), { isGreeting: true });
       hasGreetedRef.current = true;
       log('Playing opening greeting (once per session)', greeting);
 
@@ -275,7 +276,8 @@ export default function VoiceScreen({ route, navigation }: any) {
       setConversationState('speaking');
 
       try {
-        const audioUrl = await generateSpeech(greeting);
+        await preSpeechThinkingDelay(true);
+        const audioUrl = await generateSpeech(greeting, { isGreeting: true, skipHumanize: true });
         if (audioUrl) {
           const audio = new Audio(audioUrl);
           currentAudioRef.current = audio;
@@ -462,6 +464,7 @@ export default function VoiceScreen({ route, navigation }: any) {
         log('Anti-repeat triggered — swapping response', `"${response.substring(0, 60)}" → "${fallback}"`);
         finalResponse = fallback;
       }
+      finalResponse = humanizeForTts(finalResponse);
       lastDavidResponseRef.current = finalResponse;
 
       setIsDavidThinking(false);
@@ -495,7 +498,8 @@ export default function VoiceScreen({ route, navigation }: any) {
     log('TTS request sent', `${text.length} chars`);
 
     try {
-      const audioUrl = await generateSpeech(text);
+      await preSpeechThinkingDelay(false);
+      const audioUrl = await generateSpeech(text, { skipHumanize: true });
 
       if (!audioUrl) {
         log('TTS returned null — no audio URL');

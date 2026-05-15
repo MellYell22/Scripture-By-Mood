@@ -20,6 +20,7 @@ const OPENING_GREETING_PATTERNS = [
   /^hi[,.]?\s/i,
   /^hello[,.]?\s/i,
   /^good to (see|hear)/i,
+  /^good to hear from you/i,
   /^i'?m here/i,
   /^what'?s (been on your mind|going on|up)/i,
   /^how'?s your (heart|night|day)/i,

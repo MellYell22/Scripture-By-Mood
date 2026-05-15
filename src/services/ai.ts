@@ -1,4 +1,11 @@
 import { MoodResponse, ResponseLength, Scripture } from "../types";
+import { humanizeForTts } from "../utils/davidSpeechDelivery";
+
+export type GenerateSpeechOptions = {
+  isGreeting?: boolean;
+  /** Set when text was already passed through humanizeForTts */
+  skipHumanize?: boolean;
+};
 
 export const getMoodScriptures = async (mood: string, translation: string = 'NIV', responseLength: ResponseLength = 'short'): Promise<MoodResponse> => {
   console.log("OPENAI REQUEST SENT - Mood Scriptures");
@@ -74,9 +81,9 @@ export interface ChatHistoryMessage {
 
 export const getChatResponse = async (history: ChatHistoryMessage[], responseLength: ResponseLength = 'short'): Promise<string> => {
   const lengthInstruction = {
-    short: "Reply in 1-2 short, plain sentences. Sound human, not scripted. No therapy phrases. A question is optional — sometimes just reflect briefly.",
-    medium: "Reply in 2-3 natural sentences with varied rhythm. Stay grounded. No validation loops. Scripture only if it truly fits.",
-    long: "Reply in 3-4 conversational sentences max. Emotionally present but not preachy or corporate. No repetitive empathy templates."
+    short: "Reply in 1-2 short lines. Sound like a real person talking — use ellipsis pauses sometimes (hey… / yeah…). Imperfect, not polished. No therapy phrases.",
+    medium: "Reply in 2-3 short sentences with varied rhythm. Natural pauses via ellipsis okay. Stay grounded. No validation loops.",
+    long: "Reply in 3 short sentences max. Conversational and alive — not scripted. Ellipsis pauses okay. No corporate empathy."
   }[responseLength];
 
   // Map history to OpenAI format (Gemini uses 'model', OpenAI uses 'assistant')
@@ -113,9 +120,9 @@ export const getChatResponseStream = async (
   responseLength: ResponseLength = 'short'
 ): Promise<string> => {
   const lengthInstruction = {
-    short: "Reply in 1-2 short, plain sentences. Sound human, not scripted. No therapy phrases. A question is optional — sometimes just reflect briefly.",
-    medium: "Reply in 2-3 natural sentences with varied rhythm. Stay grounded. No validation loops. Scripture only if it truly fits.",
-    long: "Reply in 3-4 conversational sentences max. Emotionally present but not preachy or corporate. No repetitive empathy templates."
+    short: "Reply in 1-2 short lines. Sound like a real person talking — use ellipsis pauses sometimes (hey… / yeah…). Imperfect, not polished. No therapy phrases.",
+    medium: "Reply in 2-3 short sentences with varied rhythm. Natural pauses via ellipsis okay. Stay grounded. No validation loops.",
+    long: "Reply in 3 short sentences max. Conversational and alive — not scripted. Ellipsis pauses okay. No corporate empathy."
   }[responseLength];
 
   const messages = history.map(h => ({
@@ -171,12 +178,18 @@ export const getChatResponseStream = async (
   return fullText;
 };
 
-export const generateSpeech = async (text: string): Promise<string | null> => {
+export const generateSpeech = async (
+  text: string,
+  options: GenerateSpeechOptions = {},
+): Promise<string | null> => {
+  const spokenText = options.skipHumanize
+    ? text.trim()
+    : humanizeForTts(text, { isGreeting: options.isGreeting });
   try {
     const response = await fetch('/api/speech', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ text })
+      body: JSON.stringify({ text: spokenText })
     });
 
     if (!response.ok) return null;
