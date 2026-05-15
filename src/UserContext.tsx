@@ -37,21 +37,21 @@ export function UserProvider({ children }: { children: ReactNode }) {
     // Get initial session
     supabase!.auth.getSession().then(({ data: { session } }) => {
       setSession(session);
+      // Unblock UI immediately — profile loads in background (voice must not wait)
+      setLoading(false);
       if (session?.user) {
-        fetchProfile(session.user.id);
-      } else {
-        setLoading(false);
+        void fetchProfile(session.user.id);
       }
     });
 
     // Listen for auth changes
     const { data: { subscription: authSubscription } } = supabase!.auth.onAuthStateChange((_event, session) => {
       setSession(session);
+      setLoading(false);
       if (session?.user) {
-        fetchProfile(session.user.id);
+        void fetchProfile(session.user.id);
       } else {
         setProfile(null);
-        setLoading(false);
       }
     });
 
@@ -114,7 +114,6 @@ export function UserProvider({ children }: { children: ReactNode }) {
         }
         console.error(`[UserContext] Profile not found after all retries for user ${userId}`);
         setProfile(null);
-        setLoading(false);
         return null;
       }
 
@@ -126,13 +125,11 @@ export function UserProvider({ children }: { children: ReactNode }) {
       }
       
       setProfile(profileData);
-      setLoading(false);
       return profileData;
       
     } catch (error) {
       console.error('[UserContext] Exception in fetchProfile:', error);
       if (retries === 0) {
-        setLoading(false);
         return null;
       } else {
         await new Promise(resolve => setTimeout(resolve, 2000));
@@ -149,19 +146,25 @@ export function UserProvider({ children }: { children: ReactNode }) {
       // Refresh session first to ensure we have current metadata/claims if any
       await supabase!.auth.refreshSession();
       
-      // Fetch latest profile data from DB and return it directly
-      return await fetchProfile(session.user.id, 0); // No retries on manual refresh to avoid blocking
+      try {
+        return await fetchProfile(session.user.id, 0);
+      } finally {
+        if (showLoading) setLoading(false);
+      }
     } else {
       console.warn('[UserContext] refreshProfile called but no active session user ID found');
       // Fallback check: maybe we need to get current user ID manually
       const { data: { user } } = await supabase!.auth.getUser();
       if (user) {
         console.log(`[UserContext] Found user via getUser fallback: ${user.id}`);
-        return await fetchProfile(user.id, 0);
-      } else {
-        setLoading(false);
-        return null;
+        if (showLoading) setLoading(true);
+        try {
+          return await fetchProfile(user.id, 0);
+        } finally {
+          if (showLoading) setLoading(false);
+        }
       }
+      return null;
     }
   }, [session?.user?.id]);
 

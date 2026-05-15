@@ -130,6 +130,33 @@ export const getDavidGreeting = (firstName?: string): string => {
   return pool[Math.floor(Math.random() * pool.length)];
 };
 
+/** Instant voice-session openers — sync, no API wait */
+export const DAVID_VOICE_SESSION_GREETINGS = [
+  'hey… good to hear your voice.',
+  "mm… how's your day been?",
+  'hey…',
+  'mm.',
+  'there you are…',
+  "hey. how's it going?",
+  'good to see you.',
+];
+
+export const getVoiceSessionGreeting = (firstName?: string): string => {
+  const cleanName = cleanFirstName(firstName);
+  if (cleanName) {
+    const named = [
+      `hey, ${cleanName}… good to hear your voice.`,
+      `mm… hey ${cleanName}. how's your day been?`,
+      `hey ${cleanName}…`,
+      `there you are, ${cleanName}.`,
+    ];
+    return named[Math.floor(Math.random() * named.length)];
+  }
+  return DAVID_VOICE_SESSION_GREETINGS[
+    Math.floor(Math.random() * DAVID_VOICE_SESSION_GREETINGS.length)
+  ];
+};
+
 /** Text chat initial messages */
 export const DAVID_CHAT_GREETINGS = [
   "hey…",

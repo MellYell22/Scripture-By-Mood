@@ -6,7 +6,7 @@ import { motion, AnimatePresence } from "motion/react";
 const MotionView = motion(View);
 import { ChatMessage } from '../types';
 import { getChatResponse, generateSpeech } from '../services/ai';
-import { hasProAccess } from '../utils/tier';
+import { hasProAccess, OWNER_EMAIL } from '../utils/tier';
 import { saveAIFeedback } from '../services/supabase';
 import { useUser } from '../UserContext';
 import {
@@ -17,8 +17,11 @@ import {
   looksLikeBannedTherapyPhrase,
   normalizeTranscript,
 } from '../utils/voiceTranscript';
-import { getDavidGreeting, DAVID_ANTI_REPEAT_FALLBACKS } from '../constants/davidPersona';
+import { getVoiceSessionGreeting, DAVID_ANTI_REPEAT_FALLBACKS } from '../constants/davidPersona';
 import { humanizeForTts, preSpeechThinkingDelay } from '../utils/davidSpeechDelivery';
+
+const TTS_START_TIMEOUT_MS = 2000;
+const POST_GREETING_MIC_DELAY_MS = 400;
 
 // ─── Logging ────────────────────────────────────────────────────────────────
 // All voice events are prefixed with [David] for easy filtering in DevTools.
@@ -107,6 +110,7 @@ export default function VoiceScreen({ route, navigation }: any) {
   const hasGreetedRef = useRef(false);
   const lastResponseAtRef = useRef(0);
   const recentTranscriptsRef = useRef<string[]>([]);
+  const sessionGenerationRef = useRef(0);
 
   // RMS thresholds — tuned to ignore breath/cough bursts, require sustained speech
   const SPEECH_RMS_THRESHOLD = 0.024;
@@ -168,10 +172,35 @@ export default function VoiceScreen({ route, navigation }: any) {
     }, delay);
   };
 
+  const hasVoiceAccess = (): boolean => {
+    if (profile && hasProAccess(profile)) return true;
+    const email = session?.user?.email?.toLowerCase();
+    return email === OWNER_EMAIL.toLowerCase();
+  };
+
+  const getFirstNameFromSession = (): string => {
+    const metadata = session?.user?.user_metadata || {};
+    const identityData = session?.user?.identities?.[0]?.identity_data || {};
+    return cleanFirstName(metadata.first_name)
+      || cleanFirstName(metadata.given_name)
+      || cleanFirstName(metadata.full_name)
+      || cleanFirstName(metadata.name)
+      || cleanFirstName(identityData.first_name)
+      || cleanFirstName(identityData.given_name)
+      || cleanFirstName(identityData.full_name)
+      || cleanFirstName(identityData.name)
+      || '';
+  };
+
+  const isSessionGenerationActive = (generation: number): boolean =>
+    sessionGenerationRef.current === generation && isConnectedRef.current;
+
   // ── Lifecycle ─────────────────────────────────────────────────────────────
   useEffect(() => {
     checkApiKey();
-    return () => { stopSession(); };
+    return () => {
+      cleanupSessionResources('component_unmount');
+    };
   }, []);
 
   // ── API key check (AI Studio env only) ───────────────────────────────────
@@ -209,18 +238,95 @@ export default function VoiceScreen({ route, navigation }: any) {
     }
   };
 
+  const beginListeningAfterGreeting = (generation: number) => {
+    if (!isSessionGenerationActive(generation)) return;
+    setIsConnecting(false);
+    setConversationState('listening');
+    setTimeout(() => {
+      if (isSessionGenerationActive(generation)) {
+        startListening();
+      }
+    }, POST_GREETING_MIC_DELAY_MS);
+  };
+
+  /** Opening greeting — sync pick, async TTS without blocking session lifecycle */
+  const playOpeningGreeting = async (greeting: string, generation: number) => {
+    if (!isSessionGenerationActive(generation)) return;
+
+    isDavidSpeakingRef.current = true;
+    setIsDavidSpeaking(true);
+    setConversationState('speaking');
+    log('TTS started', greeting);
+
+    try {
+      const ttsPromise = generateSpeech(greeting, { isGreeting: true, skipHumanize: true });
+      const timeoutPromise = new Promise<null>((resolve) => {
+        setTimeout(() => resolve(null), TTS_START_TIMEOUT_MS);
+      });
+      const audioUrl = await Promise.race([ttsPromise, timeoutPromise]);
+
+      if (!isSessionGenerationActive(generation)) return;
+
+      if (!audioUrl) {
+        log('TTS timeout or failed — continuing without blocking');
+        addLog('Greeting audio unavailable — mic opening');
+        isDavidSpeakingRef.current = false;
+        setIsDavidSpeaking(false);
+        markResponseCompleted();
+        beginListeningAfterGreeting(generation);
+        return;
+      }
+
+      const audio = new Audio(audioUrl);
+      currentAudioRef.current = audio;
+      audio.preload = 'auto';
+
+      const finishGreeting = () => {
+        if (!isSessionGenerationActive(generation)) return;
+        log('TTS finished');
+        isDavidSpeakingRef.current = false;
+        setIsDavidSpeaking(false);
+        URL.revokeObjectURL(audioUrl);
+        currentAudioRef.current = null;
+        markResponseCompleted();
+        beginListeningAfterGreeting(generation);
+      };
+
+      audio.onended = finishGreeting;
+      audio.onerror = () => {
+        log('TTS playback error — opening mic');
+        finishGreeting();
+      };
+
+      const playPromise = audio.play();
+      if (playPromise !== undefined) {
+        playPromise.catch((playErr: any) => {
+          log('TTS play() rejected', playErr?.message);
+          finishGreeting();
+        });
+      }
+    } catch (err: any) {
+      log('TTS exception', err?.message);
+      if (!isSessionGenerationActive(generation)) return;
+      isDavidSpeakingRef.current = false;
+      setIsDavidSpeaking(false);
+      markResponseCompleted();
+      beginListeningAfterGreeting(generation);
+    }
+  };
+
   // ── Start session ─────────────────────────────────────────────────────────
-  // Pressing "Start Conversation" activates the microphone and plays David's opening greeting.
-  const startSession = async () => {
+  const startSession = () => {
     log('Start Conversation button pressed');
 
-    if (!hasProAccess(profile)) {
+    if (!hasVoiceAccess()) {
       alert('Voice chat is a Pro feature. Please upgrade to access.');
       return;
     }
 
-    // Unlock audio on this user gesture so play() works on mobile
     unlockAudioContext();
+
+    const generation = ++sessionGenerationRef.current;
 
     setIsConnecting(true);
     setConversationState('starting');
@@ -237,108 +343,30 @@ export default function VoiceScreen({ route, navigation }: any) {
     emptyTranscriptStreakRef.current = 0;
     clearListenRetry();
 
-    addLog('Starting David voice session');
+    isConnectedRef.current = true;
+    setIsConnected(true);
+    setIsConnecting(false);
 
-    try {
-      isConnectedRef.current = true;
-      setIsConnected(true);
+    log('session started', { generation });
 
-      const beginListening = () => {
-        setIsConnecting(false);
-        setConversationState('listening');
-        setTimeout(() => startListening(), POST_TTS_MIC_DELAY_MS);
-      };
-
-      // One opening greeting per session only
-      if (hasGreetedRef.current) {
-        log('Greeting already played this session — listening');
-        beginListening();
-        return;
-      }
-
-      // Play David's opening greeting. Use only a real metadata name; never
-      // derive a spoken name from the user's email address or email username.
-      const metadata = session?.user?.user_metadata || {};
-      const identityData = session?.user?.identities?.[0]?.identity_data || {};
-      const firstName = cleanFirstName(metadata.first_name)
-        || cleanFirstName(metadata.given_name)
-        || cleanFirstName(metadata.full_name)
-        || cleanFirstName(metadata.name)
-        || cleanFirstName(identityData.first_name)
-        || cleanFirstName(identityData.given_name)
-        || cleanFirstName(identityData.full_name)
-        || cleanFirstName(identityData.name);
-      const greeting = humanizeForTts(getDavidGreeting(firstName), { isGreeting: true });
-      hasGreetedRef.current = true;
-      log('Playing opening greeting (once per session)', greeting);
-
-      setIsDavidSpeaking(true);
-      isDavidSpeakingRef.current = true;
-      setConversationState('speaking');
-
-      try {
-        await preSpeechThinkingDelay(true);
-        const audioUrl = await generateSpeech(greeting, { isGreeting: true, skipHumanize: true });
-        if (audioUrl) {
-          const audio = new Audio(audioUrl);
-          currentAudioRef.current = audio;
-          audio.preload = 'auto';
-
-          audio.onended = () => {
-            log('Opening greeting finished — starting mic');
-            isDavidSpeakingRef.current = false;
-            setIsDavidSpeaking(false);
-            URL.revokeObjectURL(audioUrl);
-            currentAudioRef.current = null;
-            setMessages([{ role: 'assistant', content: greeting }]);
-            markResponseCompleted();
-            beginListening();
-          };
-
-          audio.onerror = () => {
-            log('Opening greeting audio error — starting mic anyway');
-            isDavidSpeakingRef.current = false;
-            setIsDavidSpeaking(false);
-            currentAudioRef.current = null;
-            setMessages([{ role: 'assistant', content: greeting }]);
-            markResponseCompleted();
-            beginListening();
-          };
-
-          const playPromise = audio.play();
-          if (playPromise !== undefined) {
-            playPromise.catch((playErr: any) => {
-              log('Opening greeting play() rejected', playErr?.message);
-              isDavidSpeakingRef.current = false;
-              setIsDavidSpeaking(false);
-              currentAudioRef.current = null;
-              setMessages([{ role: 'assistant', content: greeting }]);
-              markResponseCompleted();
-              beginListening();
-            });
-          }
-        } else {
-          log('Opening greeting TTS failed — listening without audio greeting');
-          isDavidSpeakingRef.current = false;
-          setIsDavidSpeaking(false);
-          setMessages([{ role: 'assistant', content: greeting }]);
-          markResponseCompleted();
-          beginListening();
-        }
-      } catch (err: any) {
-        log('Opening greeting error', err?.message);
-        isDavidSpeakingRef.current = false;
-        setIsDavidSpeaking(false);
-        beginListening();
-      }
-
-    } catch (err: any) {
-      addLog(`Session start error: ${err?.message}`);
-      setError(`Failed to start: ${err?.message}`);
-      setIsConnecting(false);
-      setConversationState('idle');
-      isConnectedRef.current = false;
+    if (hasGreetedRef.current) {
+      log('greeting skipped', 'already greeted this session');
+      beginListeningAfterGreeting(generation);
+      return;
     }
+
+    const firstName = getFirstNameFromSession();
+    const greeting = humanizeForTts(getVoiceSessionGreeting(firstName || undefined), {
+      isGreeting: true,
+    });
+    hasGreetedRef.current = true;
+
+    log('greeting triggered', greeting);
+    addLog(`David: ${greeting}`);
+    setMessages([{ role: 'assistant', content: greeting }]);
+    setLastResponseText(greeting);
+
+    void playOpeningGreeting(greeting, generation);
   };
 
   // ── Transcript filter helpers ────────────────────────────────────────────
@@ -498,7 +526,7 @@ export default function VoiceScreen({ route, navigation }: any) {
     setConversationState('speaking');
     setError(null);
 
-    log('TTS request sent', `${text.length} chars`);
+    log('TTS started', `${text.length} chars`);
 
     try {
       await preSpeechThinkingDelay(false);
@@ -534,7 +562,7 @@ export default function VoiceScreen({ route, navigation }: any) {
       };
 
       audio.onended = () => {
-        log('Audio playback ended — restarting mic');
+        log('TTS finished');
         isDavidSpeakingRef.current = false;
         isProcessingVoiceRef.current = false;
         setIsDavidSpeaking(false);
@@ -929,9 +957,11 @@ export default function VoiceScreen({ route, navigation }: any) {
     handleVoiceInput(trimmed);
   };
 
-  // ── Stop session ──────────────────────────────────────────────
-  const stopSession = () => {
-    log('Session ended by user');
+  const cleanupSessionResources = (reason: string) => {
+    if (!isConnectedRef.current) return;
+
+    log('session ended', reason);
+    sessionGenerationRef.current += 1;
     isConnectedRef.current = false;
     isDavidSpeakingRef.current = false;
     isProcessingVoiceRef.current = false;
@@ -969,6 +999,11 @@ export default function VoiceScreen({ route, navigation }: any) {
     setMicErrorCount(0);
     setShowTextFallback(false);
     setTextInput('');
+    setConversationState('idle');
+  };
+
+  const stopSession = () => {
+    cleanupSessionResources('user_explicit_end_button');
   };
 
   // ── Feedback ──────────────────────────────────────────────────────────────
@@ -989,7 +1024,7 @@ export default function VoiceScreen({ route, navigation }: any) {
   };
 
   // ── Locked screen (non-Pro) ───────────────────────────────────────────────
-  if (!hasProAccess(profile)) {
+  if (!hasVoiceAccess()) {
     return (
       <View style={styles.lockedContainer}>
         <View style={styles.lockCard}>

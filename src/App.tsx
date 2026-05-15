@@ -123,7 +123,8 @@ function AppContent() {
     );
   }
 
-  if (loading) {
+  // Only block the full app while auth session is unknown — never while profile loads
+  if (loading && !session) {
     return (
       <View style={[styles.container, { justifyContent: 'center', alignItems: 'center' }]}>
         <ActivityIndicator size="large" color="#d4af37" />
