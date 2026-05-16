@@ -28,7 +28,7 @@ export default async function handler(req: any, res: any) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { mood, translation = 'NIV' } = req.body;
+  const { mood, translation = 'NIV', voiceInstruction } = req.body;
 
   try {
     if (!process.env.OPENAI_API_KEY) {
@@ -47,6 +47,7 @@ export default async function handler(req: any, res: any) {
           role: 'user', 
           content: `The user is feeling: ${mood}. 
 Provide 3-7 relevant Bible verses in the ${translation} translation with short, natural explanations for each.
+${voiceInstruction ? `\nVoice response instruction: ${voiceInstruction}` : ''}
 Ensure the response is valid JSON with the following structure:
 {
   "scriptures": [

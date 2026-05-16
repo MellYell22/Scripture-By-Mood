@@ -7,12 +7,17 @@ export type GenerateSpeechOptions = {
   skipHumanize?: boolean;
 };
 
-export const getMoodScriptures = async (mood: string, translation: string = 'NIV', responseLength: ResponseLength = 'short'): Promise<MoodResponse> => {
+export const getMoodScriptures = async (
+  mood: string,
+  translation: string = 'NIV',
+  responseLength: ResponseLength = 'short',
+  voiceInstruction?: string,
+): Promise<MoodResponse> => {
   console.log("OPENAI REQUEST SENT - Mood Scriptures");
   const response = await fetch('/api/mood-scriptures', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ mood, translation, responseLength })
+    body: JSON.stringify({ mood, translation, responseLength, voiceInstruction })
   });
 
   if (!response.ok) {

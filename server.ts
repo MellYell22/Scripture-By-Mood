@@ -346,7 +346,7 @@ app.post("/api/chat", async (req, res) => {
 });
 
 app.post("/api/mood-scriptures", async (req, res) => {
-  const { mood, translation = "NIV" } = req.body;
+  const { mood, translation = "NIV", voiceInstruction } = req.body;
 
   console.log("OPENAI REQUEST SENT - Mood Scriptures");
 
@@ -359,6 +359,7 @@ app.post("/api/mood-scriptures", async (req, res) => {
           role: "user", 
           content: `The user is feeling: ${mood}. 
 Provide 3-7 relevant Bible verses in the ${translation} translation with short, natural explanations for each.
+${voiceInstruction ? `\nVoice response instruction: ${voiceInstruction}` : ''}
 Ensure the response is valid JSON with the following structure:
 {
   "scriptures": [

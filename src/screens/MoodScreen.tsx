@@ -64,6 +64,9 @@ const MOOD_CONFIG = [
   { key: 'PEACEFUL', label: 'Peaceful', icon: Cloud },
 ];
 
+const MOOD_VOICE_RESPONSE_INSTRUCTION =
+  "Generate a real-time, calm, and conversational voice response based on the user's input. Detect the user's query, then deliver a relevant Bible verse or reflection with a smooth, unhurried pace. Keep responses short, reflective, and responsive to the user's emotional tone.";
+
 const NT_BOOKS = [
   'Matthew', 'Mark', 'Luke', 'John', 'Acts', 'Romans', '1 Corinthians', '2 Corinthians', 
   'Galatians', 'Ephesians', 'Philippians', 'Colossians', '1 Thessalonians', '2 Thessalonians', 
@@ -92,6 +95,23 @@ export default function MoodScreen({ route, navigation }: any) {
   const theme = THEMES[readingMode];
   const fonts = FONT_SIZES[fontSize];
 
+  const buildStaticMoodEncouragement = (staticMood: MoodData): string => {
+    const reaction = staticMood.davidReaction[0];
+    const scripture = staticMood.scriptures[0];
+    const followUp = staticMood.davidFollowUps[0];
+
+    if (!reaction || !scripture || !followUp) {
+      return `yeah… ${staticMood.label.toLowerCase()} can be a lot to carry. let's sit with God's word for a minute.`;
+    }
+
+    return [
+      reaction,
+      `${scripture.davidIntro} ${scripture.verse}`,
+      `${scripture.reference}. ${scripture.davidReflection}`,
+      followUp,
+    ].join(' ');
+  };
+
   React.useEffect(() => {
     if (route?.params?.mood) {
       handleInitialSearch(route.params.mood);
@@ -105,7 +125,7 @@ export default function MoodScreen({ route, navigation }: any) {
     if (staticMood) {
       setResult({
         scriptures: staticMood.scriptures.map(s => ({ ...s, explanation: 'Reflecting on God\'s word for your heart today.' })),
-        encouragement: `I see you're feeling ${staticMood.label.toLowerCase()}. Remember that God is with you in every emotion.`
+        encouragement: buildStaticMoodEncouragement(staticMood)
       });
       setLoading(false);
       return;
@@ -116,7 +136,8 @@ export default function MoodScreen({ route, navigation }: any) {
       const data = await getMoodScriptures(
         initialMood, 
         profile?.preferred_translation || 'KJV',
-        profile?.preferred_response_length || 'medium'
+        profile?.preferred_response_length || 'medium',
+        MOOD_VOICE_RESPONSE_INSTRUCTION
       );
       setResult(data);
       setFeedback(null);
@@ -137,7 +158,7 @@ export default function MoodScreen({ route, navigation }: any) {
       setMood(staticMood.key);
       setResult({
         scriptures: staticMood.scriptures.map(s => ({ ...s, explanation: 'Reflecting on God\'s word for your heart today.' })),
-        encouragement: `I see you're feeling ${staticMood.label.toLowerCase()}. Remember that God is with you in every emotion.`
+        encouragement: buildStaticMoodEncouragement(staticMood)
       });
       setLoading(false);
       return;
@@ -151,7 +172,8 @@ export default function MoodScreen({ route, navigation }: any) {
       const data = await getMoodScriptures(
         query, 
         profile?.preferred_translation || 'KJV',
-        profile?.preferred_response_length || 'medium'
+        profile?.preferred_response_length || 'medium',
+        MOOD_VOICE_RESPONSE_INSTRUCTION
       );
       setResult(data);
     } catch (error) {

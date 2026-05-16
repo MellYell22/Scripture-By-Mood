@@ -491,9 +491,10 @@ export function getDavidFollowUpForMood(moodKey: string): string | null {
  */
 export function buildDavidScriptureResponse(moodKey: string): string | null {
   const mood = MOODS_DATA.find(m => m.key === moodKey.toUpperCase());
-  if (!mood) return null;
+  if (!mood?.scriptures.length || !mood.davidFollowUps.length) return null;
   const scripture = mood.scriptures[Math.floor(Math.random() * mood.scriptures.length)];
   const followUp = mood.davidFollowUps[Math.floor(Math.random() * mood.davidFollowUps.length)];
+  if (!scripture || !followUp) return null;
   const bookName = scripture.reference.split(' ')[0];
   return [
     scripture.davidIntro,
