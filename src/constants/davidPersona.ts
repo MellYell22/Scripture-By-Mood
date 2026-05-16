@@ -134,7 +134,7 @@ export const getDavidGreeting = (firstName?: string): string => {
 export const DAVID_VOICE_SESSION_GREETINGS = [
   "hey… good to hear your voice. how have you been lately?",
   "hey… good to hear your voice. how's your day been?",
-  "mm… good to hear your voice. what's been going on?",
+  "good to hear your voice. what's been going on?",
   "hey… I'm glad you're here. how have you been?",
   "there you are… good to hear your voice. what's the day been like?",
   "hey. good to hear your voice. what's been on your mind?",
