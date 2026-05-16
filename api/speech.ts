@@ -1,170 +1,148 @@
-import { isAlreadyElevenLabsSsml, prepareDavidTtsPayload } from '../src/utils/davidSpeechDelivery';
-import { resolveDavidVoiceId } from '../src/constants/elevenLabsVoice';
+/**
+ * api/speech.ts — ElevenLabs TTS endpoint
+ *
+ * Intentionally self-contained: no utility imports that could fail at runtime.
+ * Uses plain text (no SSML) for maximum compatibility across all ElevenLabs plans.
+ *
+ * Fallback strategy:
+ *   Tier 1: David voice (9X1Jz0xL6DHvaiD9uzHw) + eleven_turbo_v2_5
+ *   Tier 2: David voice + eleven_multilingual_v2  (if turbo unavailable on plan)
+ *   Tier 3: Adam voice (pNInz6obpgDQGcFmaJgB) + eleven_monolingual_v1 (free tier safe)
+ */
+
+// David's locked voice ID
+const DAVID_VOICE_ID = '9X1Jz0xL6DHvaiD9uzHw';
+// ElevenLabs built-in Adam — available on ALL plans including free
+const ADAM_VOICE_ID = 'pNInz6obpgDQGcFmaJgB';
+
+/** Strip any SSML tags so plain-text models don't choke */
+function stripSsml(text: string): string {
+  return text.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+}
+
+/** Call ElevenLabs TTS and return the fetch Response */
+async function callElevenLabs(
+  apiKey: string,
+  voiceId: string,
+  text: string,
+  modelId: string,
+): Promise<Response> {
+  const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?optimize_streaming_latency=3&output_format=mp3_22050_32`;
+  return fetch(url, {
+    method: 'POST',
+    headers: {
+      Accept: 'audio/mpeg',
+      'Content-Type': 'application/json',
+      'xi-api-key': apiKey,
+    },
+    body: JSON.stringify({
+      text,
+      model_id: modelId,
+      enable_ssml_parsing: false,
+      voice_settings: {
+        stability: 0.45,
+        similarity_boost: 0.75,
+        style: 0.0,
+        use_speaker_boost: false,
+      },
+    }),
+  });
+}
 
 export default async function handler(req: any, res: any) {
-  // CORS headers if needed
+  // ── CORS ──────────────────────────────────────────────────────────────────
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
-
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
-
+  if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') {
-    console.warn(`[Speech API] Method ${req.method} not allowed`);
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { text, enable_ssml_parsing: clientSsmlFlag } = req.body ?? {};
-
-  if (!text || typeof text !== 'string' || text.trim().length === 0) {
-    console.warn('[Speech API] Invalid text parameter', {
-      type: typeof text,
-      length: typeof text === 'string' ? text.length : 0,
-    });
+  // ── Validate input ────────────────────────────────────────────────────────
+  const rawText = req.body?.text;
+  if (!rawText || typeof rawText !== 'string' || !rawText.trim()) {
+    console.warn('[Speech API] Missing or empty text parameter');
     return res.status(400).json({ error: 'Missing text parameter' });
   }
 
-  const trimmedText = text.trim();
+  // Always use plain text — strip any SSML that may have been passed in
+  const text = stripSsml(rawText);
+  if (!text) {
+    return res.status(400).json({ error: 'Text was empty after stripping SSML' });
+  }
 
-  try {
-    // 1. Resolve API Key with fallbacks
-    const apiKey = process.env.ELEVENLABS_API_KEY || process.env.ELEVEN_LABS_API_KEY;
-    if (!apiKey) {
-      console.error('[Speech API] CRITICAL: Neither ELEVENLABS_API_KEY nor ELEVEN_LABS_API_KEY is configured in the environment.');
-      return res.status(500).json({ 
-        error: 'ElevenLabs API Key is not configured on the server.',
-        details: 'Check Vercel Environment Variables.'
-      });
-    }
-    
-    // Log key presence without leaking the value
-    console.log(`[Speech API] API Key found. Length: ${apiKey.length}, Starts with: ${apiKey.substring(0, 3)}...`);
-
-    const voiceId = resolveDavidVoiceId(
-      process.env.ELEVENLABS_VOICE_ID || process.env.ELEVEN_LABS_VOICE_ID,
-    );
-    console.log(`[Speech API] Using Voice ID: ${voiceId}`);
-
-    const alreadySsml = isAlreadyElevenLabsSsml(trimmedText);
-    const ttsPayload = alreadySsml
-      ? { ssmlText: trimmedText, enableSsmlParsing: clientSsmlFlag !== false }
-      : clientSsmlFlag === true && trimmedText.includes('<break')
-        ? { ssmlText: trimmedText, enableSsmlParsing: true }
-        : prepareDavidTtsPayload(trimmedText, { force: true });
-
-    if (ttsPayload.enableSsmlParsing) {
-      console.log('[Speech API] SSML delivery enabled (prosody + breaks)');
-    }
-
-    const synthesize = (id: string) =>
-      fetch(`https://api.elevenlabs.io/v1/text-to-speech/${id}?optimize_streaming_latency=4&output_format=mp3_22050_32`, {
-        method: 'POST',
-        headers: {
-          'Accept': 'audio/mpeg',
-          'Content-Type': 'application/json',
-          'xi-api-key': apiKey,
-        },
-        body: JSON.stringify({
-          text: ttsPayload.ssmlText,
-          model_id: 'eleven_turbo_v2_5',
-          enable_ssml_parsing: ttsPayload.enableSsmlParsing,
-          voice_settings: {
-            stability: 0.45,
-            similarity_boost: 0.75,
-            style: 0.0,
-            use_speaker_boost: false,
-          },
-        }),
-      });
-
-        let response = await synthesize(voiceId);
-
-    // ── Fallback voice retry ──────────────────────────────────────────────────
-    // If the primary voice fails with a 4xx (voice not found, plan restriction,
-    // or unauthorized), retry with ElevenLabs built-in Adam voice which is
-    // available on all plans including free tier.
-    // Trigger fallback on any non-2xx: 4xx (plan/voice restriction) OR 5xx (model not available on plan)
-    if (!response.ok) {
-      const errPreview = await response.text();
-      console.warn(`[Speech API] Primary voice ${voiceId} failed (${response.status}): ${errPreview.substring(0, 200)}`);
-      const FALLBACK_VOICE_ID = 'pNInz6obpgDQGcFmaJgB'; // Adam — available on all ElevenLabs plans
-      console.warn(`[Speech API] Retrying with fallback voice: ${FALLBACK_VOICE_ID}`);
-      response = await fetch(
-        `https://api.elevenlabs.io/v1/text-to-speech/${FALLBACK_VOICE_ID}?optimize_streaming_latency=4&output_format=mp3_22050_32`,
-        {
-          method: 'POST',
-          headers: {
-            'Accept': 'audio/mpeg',
-            'Content-Type': 'application/json',
-            'xi-api-key': apiKey,
-          },
-          body: JSON.stringify({
-            // Strip SSML tags for fallback — eleven_monolingual_v1 does not support SSML
-            text: ttsPayload.ssmlText.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim(),
-            model_id: 'eleven_monolingual_v1', // most compatible — works on all plans
-            enable_ssml_parsing: false, // SSML not supported on this model
-            voice_settings: {
-              stability: 0.45,
-              similarity_boost: 0.75,
-              style: 0.0,
-              use_speaker_boost: false,
-            },
-          }),
-        },
-      );
-    }
-
-    // 4. Handle ElevenLabs errors explicitly
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(
-        `[Speech API] ElevenLabs failed status=${response.status} body=${errorText.substring(0, 500)}`,
-      );
-      
-      let parsedError = errorText;
-      let userMessage = `ElevenLabs API Error (${response.status})`;
-      try {
-        const json = JSON.parse(errorText);
-        if (json.detail?.message) parsedError = json.detail.message;
-        else if (json.detail) parsedError = typeof json.detail === 'string' ? json.detail : JSON.stringify(json.detail);
-      } catch (e) {
-        // Ignore parse error, use raw text
-      }
-
-      // 402 = quota exhausted or subscription required on ElevenLabs account
-      if (response.status === 402) {
-        userMessage = 'ElevenLabs quota exhausted or subscription required. Check your ElevenLabs account billing at elevenlabs.io.';
-        console.error('[Speech API] 402 Payment Required — ElevenLabs account has hit its character quota or requires an active subscription.');
-      }
-      // 401 = invalid or missing API key
-      if (response.status === 401) {
-        userMessage = 'ElevenLabs API key is invalid or missing. Check ELEVENLABS_API_KEY in Vercel environment variables.';
-        console.error('[Speech API] 401 Unauthorized — ELEVENLABS_API_KEY is invalid or not set correctly in Vercel.');
-      }
-
-      return res.status(response.status).json({ 
-        error: userMessage,
-        details: parsedError
-      });
-    }
-
-    // 5. Return success
-    console.log('[Speech API] ElevenLabs call successful. Returning audio stream.');
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-
-    res.setHeader('Content-Type', 'audio/mpeg');
-    res.setHeader('Content-Length', buffer.length);
-    res.status(200).send(buffer);
-    
-  } catch (error: any) {
-    console.error('[Speech API] Unexpected internal error:', error.message);
-    console.error(error.stack);
-    res.status(500).json({ 
-      error: 'Internal Server Error during speech generation',
-      message: error.message 
+  // ── API Key ───────────────────────────────────────────────────────────────
+  const apiKey = process.env.ELEVENLABS_API_KEY || process.env.ELEVEN_LABS_API_KEY;
+  if (!apiKey) {
+    console.error('[Speech API] CRITICAL: ELEVENLABS_API_KEY not set in environment');
+    return res.status(500).json({
+      error: 'ElevenLabs API key not configured. Add ELEVENLABS_API_KEY to Vercel env vars.',
     });
   }
+  console.log(`[Speech API] Key OK (len=${apiKey.length}), text="${text.substring(0, 60)}..."`);
+
+  // ── 3-tier fallback ───────────────────────────────────────────────────────
+  const attempts = [
+    { voiceId: DAVID_VOICE_ID, model: 'eleven_turbo_v2_5',      label: 'David/turbo' },
+    { voiceId: DAVID_VOICE_ID, model: 'eleven_multilingual_v2',  label: 'David/multilingual' },
+    { voiceId: ADAM_VOICE_ID,  model: 'eleven_monolingual_v1',   label: 'Adam/monolingual (fallback)' },
+  ];
+
+  let lastStatus = 500;
+  let lastBody = '';
+
+  for (const attempt of attempts) {
+    console.log(`[Speech API] Trying ${attempt.label}...`);
+    try {
+      const response = await callElevenLabs(apiKey, attempt.voiceId, text, attempt.model);
+
+      if (response.ok) {
+        console.log(`[Speech API] Success with ${attempt.label}`);
+        const arrayBuffer = await response.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        res.setHeader('Content-Type', 'audio/mpeg');
+        res.setHeader('Content-Length', buffer.length);
+        return res.status(200).send(buffer);
+      }
+
+      // Non-2xx — log and try next tier
+      lastStatus = response.status;
+      lastBody = await response.text();
+      console.warn(
+        `[Speech API] ${attempt.label} failed: HTTP ${lastStatus} — ${lastBody.substring(0, 300)}`,
+      );
+
+      // 402 = quota exhausted — no point retrying other voices/models
+      if (lastStatus === 402) {
+        console.error('[Speech API] 402 — ElevenLabs quota exhausted or subscription lapsed');
+        return res.status(402).json({
+          error: 'ElevenLabs quota exhausted. Check billing at elevenlabs.io.',
+          details: lastBody,
+        });
+      }
+
+      // 401 = bad API key — no point retrying
+      if (lastStatus === 401) {
+        console.error('[Speech API] 401 — Invalid ELEVENLABS_API_KEY');
+        return res.status(401).json({
+          error: 'ElevenLabs API key is invalid. Check ELEVENLABS_API_KEY in Vercel env vars.',
+          details: lastBody,
+        });
+      }
+
+      // Otherwise continue to next tier
+    } catch (fetchErr: any) {
+      console.error(`[Speech API] ${attempt.label} threw: ${fetchErr.message}`);
+      lastBody = fetchErr.message;
+    }
+  }
+
+  // All 3 tiers failed
+  console.error(`[Speech API] All tiers failed. Last status: ${lastStatus}. Last body: ${lastBody.substring(0, 500)}`);
+  return res.status(500).json({
+    error: 'All ElevenLabs TTS attempts failed',
+    lastStatus,
+    details: lastBody,
+  });
 }
