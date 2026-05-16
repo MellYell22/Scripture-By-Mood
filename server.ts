@@ -555,103 +555,80 @@ app.post("/api/transcribe", express.raw({ type: '*/*', limit: '25mb' }), async (
 });
 
 app.post("/api/speech", async (req, res) => {
-  const { text, enable_ssml_parsing: clientSsmlFlag } = req.body ?? {};
+  // LemonFox TTS — replaces ElevenLabs
+  // Docs: https://www.lemonfox.ai/apis/text-to-speech
+  const { text } = req.body ?? {};
 
-  if (!text || typeof text !== 'string' || text.trim().length === 0) {
-    console.warn('[Speech] Invalid text parameter', {
-      type: typeof text,
-      length: typeof text === 'string' ? text.length : 0,
-    });
+  if (!text || typeof text !== 'string' || !text.trim()) {
+    console.warn('[Speech] Missing or empty text parameter');
     return res.status(400).json({ error: 'Missing text parameter' });
   }
 
-  const trimmedText = text.trim();
+  // Strip any SSML tags — LemonFox uses plain text only
+  const cleanText = text.trim().replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+  if (!cleanText) {
+    return res.status(400).json({ error: 'Text was empty after stripping markup' });
+  }
+
+  const apiKey = process.env.LEMONFOX_API_KEY;
+  if (!apiKey) {
+    console.error('[Speech] LEMONFOX_API_KEY is not configured');
+    return res.status(500).json({ error: 'LemonFox API key not configured. Add LEMONFOX_API_KEY to environment.' });
+  }
+
+  const callLemonFox = (voice: string) =>
+    fetch('https://api.lemonfox.ai/v1/audio/speech', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'Accept': 'audio/mpeg',
+      },
+      body: JSON.stringify({
+        input: cleanText,
+        voice,
+        language: 'en-us',
+        response_format: 'mp3',
+        speed: 0.95,
+      }),
+    });
 
   try {
-    const elevenLabsApiKey = process.env.ELEVENLABS_API_KEY || process.env.ELEVEN_LABS_API_KEY;
-    if (!elevenLabsApiKey) {
-      console.error('[Speech] ELEVENLABS_API_KEY is not configured');
-      return res.status(500).json({ error: 'ElevenLabs API Key is not configured.' });
+    const attempts = [
+      { voice: 'onyx',  label: 'LemonFox/onyx (primary)' },
+      { voice: 'eric',  label: 'LemonFox/eric (fallback)' },
+    ];
+
+    let lastStatus = 500;
+    let lastBody = '';
+
+    for (const attempt of attempts) {
+      console.log(`[Speech] Trying ${attempt.label}...`);
+      const response = await callLemonFox(attempt.voice);
+
+      if (response.ok) {
+        console.log(`[Speech] Success with ${attempt.label}`);
+        const arrayBuffer = await response.arrayBuffer();
+        const buffer = Buffer.from(arrayBuffer);
+        res.setHeader('Content-Type', 'audio/mpeg');
+        return res.send(buffer);
+      }
+
+      lastStatus = response.status;
+      lastBody = await response.text();
+      console.warn(`[Speech] ${attempt.label} failed: HTTP ${lastStatus} — ${lastBody.substring(0, 300)}`);
+
+      if (lastStatus === 401) {
+        return res.status(401).json({ error: 'LemonFox API key invalid. Check LEMONFOX_API_KEY.', details: lastBody });
+      }
+      if (lastStatus === 402 || lastStatus === 429) {
+        return res.status(lastStatus).json({ error: 'LemonFox quota or rate limit hit.', details: lastBody });
+      }
     }
 
-    const VOICE_ID = resolveDavidVoiceId(
-      process.env.ELEVENLABS_VOICE_ID || process.env.ELEVEN_LABS_VOICE_ID,
-    );
-
-    const alreadySsml = isAlreadyElevenLabsSsml(trimmedText);
-    const ttsPayload = alreadySsml
-      ? { ssmlText: trimmedText, enableSsmlParsing: clientSsmlFlag !== false }
-      : clientSsmlFlag === true && trimmedText.includes('<break')
-        ? { ssmlText: trimmedText, enableSsmlParsing: true }
-        : prepareDavidTtsPayload(trimmedText, { force: true });
-
-    const synthesize = (
-      voiceId: string,
-      payload: { text: string; model_id: string; enable_ssml_parsing: boolean },
-    ) =>
-      fetch(
-        `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?optimize_streaming_latency=4&output_format=mp3_22050_32`,
-        {
-          method: "POST",
-          headers: {
-            "Accept": "audio/mpeg",
-            "Content-Type": "application/json",
-            "xi-api-key": elevenLabsApiKey,
-          },
-          body: JSON.stringify({
-            text: payload.text,
-            model_id: payload.model_id,
-            enable_ssml_parsing: payload.enable_ssml_parsing,
-            voice_settings: {
-              stability: 0.45,
-              similarity_boost: 0.75,
-              style: 0.0,
-              use_speaker_boost: false,
-            },
-          }),
-        },
-      );
-
-    const primaryPayload = {
-      text: ttsPayload.ssmlText,
-      model_id: "eleven_flash_v2_5",
-      enable_ssml_parsing: ttsPayload.enableSsmlParsing,
-    };
-
-    let response = await synthesize(VOICE_ID, primaryPayload);
-
-    if (!response.ok && [401, 403, 404, 422].includes(response.status)) {
-      const errPreview = await response.text();
-      console.warn(
-        `[Speech] Primary voice ${VOICE_ID} failed (${response.status}): ${errPreview.substring(0, 200)}`,
-      );
-      const FALLBACK_VOICE_ID = 'pNInz6obpgDQGcFmaJgB';
-      console.warn(`[Speech] Retrying with fallback voice: ${FALLBACK_VOICE_ID}`);
-      response = await synthesize(FALLBACK_VOICE_ID, {
-        text: ttsPayload.ssmlText,
-        model_id: 'eleven_monolingual_v1',
-        enable_ssml_parsing: false,
-      });
-    }
-
-    if (!response.ok) {
-      const errorText = await response.text();
-      console.error(
-        `[Speech] ElevenLabs failed status=${response.status} body=${errorText.substring(0, 500)}`,
-      );
-      return res.status(response.status).json({
-        error: `ElevenLabs API Error (${response.status})`,
-        details: errorText.substring(0, 500),
-      });
-    }
-
-    const arrayBuffer = await response.arrayBuffer();
-    const buffer = Buffer.from(arrayBuffer);
-
-    res.setHeader('Content-Type', 'audio/mpeg');
-    res.send(buffer);
+    return res.status(500).json({ error: 'All LemonFox TTS attempts failed', lastStatus, details: lastBody });
   } catch (error: any) {
-    console.error("[Speech] Unexpected error:", error?.message || error);
+    console.error('[Speech] Unexpected error:', error?.message || error);
     res.status(500).json({ error: error?.message || 'Speech generation failed' });
   }
 });
@@ -713,8 +690,8 @@ async function startServer() {
       console.log(`💳 Stripe: ${getStripe() ? "✅ Configured" : "❌ Missing STRIPE_SECRET_KEY"}`);
       console.log(`🗄️ Supabase: ${supabase ? "✅ Configured" : "❌ Missing SUPABASE_URL/SERVICE_ROLE_KEY"}`);
       console.log(`🤖 OpenAI: ${process.env.OPENAI_API_KEY ? "✅ Configured" : "❌ Missing OPENAI_API_KEY"}`);
-      console.log(`🎙️ ElevenLabs: ${(process.env.ELEVENLABS_API_KEY || process.env.ELEVEN_LABS_API_KEY) ? "✅ Configured" : "❌ Missing ELEVENLABS_API_KEY or ELEVEN_LABS_API_KEY"}`);
-      console.log(`🗣️ ElevenLabs Voice ID: ${resolveDavidVoiceId(process.env.ELEVENLABS_VOICE_ID || process.env.ELEVEN_LABS_VOICE_ID)}`);
+      console.log(`🎙️ LemonFox TTS: ${process.env.LEMONFOX_API_KEY ? "✅ Configured" : "❌ Missing LEMONFOX_API_KEY"}`);
+      console.log(`🗣️ David Voice: onyx (LemonFox)`);
       console.log("--------------------------\n");
     });
   }

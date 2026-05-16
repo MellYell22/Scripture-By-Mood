@@ -1,50 +1,49 @@
 /**
- * api/speech.ts — ElevenLabs TTS endpoint
+ * api/speech.ts — LemonFox TTS endpoint
  *
- * Intentionally self-contained: no utility imports that could fail at runtime.
- * Uses plain text (no SSML) for maximum compatibility across all ElevenLabs plans.
+ * Replaces ElevenLabs with LemonFox TTS API.
+ * LemonFox is OpenAI/ElevenLabs-compatible, lower cost, and lower latency.
  *
- * Fallback strategy:
- *   Tier 1: David voice (9X1Jz0xL6DHvaiD9uzHw) + eleven_turbo_v2_5
- *   Tier 2: David voice + eleven_multilingual_v2  (if turbo unavailable on plan)
- *   Tier 3: Adam voice (pNInz6obpgDQGcFmaJgB) + eleven_monolingual_v1 (free tier safe)
+ * Endpoint: POST https://api.lemonfox.ai/v1/audio/speech
+ * Auth:     Authorization: Bearer LEMONFOX_API_KEY
+ *
+ * David's voice: "onyx" — deep, calm, grounded male voice
+ * Fallback voice: "eric" — warm, natural male voice
+ *
+ * Docs: https://www.lemonfox.ai/apis/text-to-speech
  */
 
-// David's locked voice ID
-const DAVID_VOICE_ID = '9X1Jz0xL6DHvaiD9uzHw';
-// ElevenLabs built-in Adam — available on ALL plans including free
-const ADAM_VOICE_ID = 'pNInz6obpgDQGcFmaJgB';
+// David's primary voice — deep, calm, grounded
+const DAVID_VOICE = 'onyx';
+// Fallback voice if primary fails
+const FALLBACK_VOICE = 'eric';
 
-/** Strip any SSML tags so plain-text models don't choke */
+const LEMONFOX_TTS_URL = 'https://api.lemonfox.ai/v1/audio/speech';
+
+/** Strip any SSML tags so the plain-text API doesn't receive markup */
 function stripSsml(text: string): string {
   return text.replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
 }
 
-/** Call ElevenLabs TTS and return the fetch Response */
-async function callElevenLabs(
+/** Call LemonFox TTS and return the fetch Response */
+async function callLemonFox(
   apiKey: string,
-  voiceId: string,
+  voice: string,
   text: string,
-  modelId: string,
 ): Promise<Response> {
-  const url = `https://api.elevenlabs.io/v1/text-to-speech/${voiceId}?optimize_streaming_latency=3&output_format=mp3_22050_32`;
-  return fetch(url, {
+  return fetch(LEMONFOX_TTS_URL, {
     method: 'POST',
     headers: {
-      Accept: 'audio/mpeg',
+      'Authorization': `Bearer ${apiKey}`,
       'Content-Type': 'application/json',
-      'xi-api-key': apiKey,
+      'Accept': 'audio/mpeg',
     },
     body: JSON.stringify({
-      text,
-      model_id: modelId,
-      enable_ssml_parsing: false,
-      voice_settings: {
-        stability: 0.45,
-        similarity_boost: 0.75,
-        style: 0.0,
-        use_speaker_boost: false,
-      },
+      input: text,
+      voice,
+      language: 'en-us',
+      response_format: 'mp3',
+      speed: 0.95, // Slightly slower than default — more natural, less rushed
     }),
   });
 }
@@ -66,27 +65,26 @@ export default async function handler(req: any, res: any) {
     return res.status(400).json({ error: 'Missing text parameter' });
   }
 
-  // Always use plain text — strip any SSML that may have been passed in
+  // Strip SSML tags — LemonFox uses plain text only
   const text = stripSsml(rawText);
   if (!text) {
-    return res.status(400).json({ error: 'Text was empty after stripping SSML' });
+    return res.status(400).json({ error: 'Text was empty after stripping markup' });
   }
 
   // ── API Key ───────────────────────────────────────────────────────────────
-  const apiKey = process.env.ELEVENLABS_API_KEY || process.env.ELEVEN_LABS_API_KEY;
+  const apiKey = process.env.LEMONFOX_API_KEY;
   if (!apiKey) {
-    console.error('[Speech API] CRITICAL: ELEVENLABS_API_KEY not set in environment');
+    console.error('[Speech API] CRITICAL: LEMONFOX_API_KEY not set in environment');
     return res.status(500).json({
-      error: 'ElevenLabs API key not configured. Add ELEVENLABS_API_KEY to Vercel env vars.',
+      error: 'LemonFox API key not configured. Add LEMONFOX_API_KEY to Vercel env vars.',
     });
   }
-  console.log(`[Speech API] Key OK (len=${apiKey.length}), text="${text.substring(0, 60)}..."`);
+  console.log(`[Speech API] LemonFox key OK (len=${apiKey.length}), text="${text.substring(0, 60)}..."`);
 
-  // ── 3-tier fallback ───────────────────────────────────────────────────────
+  // ── 2-tier fallback ───────────────────────────────────────────────────────
   const attempts = [
-    { voiceId: DAVID_VOICE_ID, model: 'eleven_turbo_v2_5',      label: 'David/turbo' },
-    { voiceId: DAVID_VOICE_ID, model: 'eleven_multilingual_v2',  label: 'David/multilingual' },
-    { voiceId: ADAM_VOICE_ID,  model: 'eleven_monolingual_v1',   label: 'Adam/monolingual (fallback)' },
+    { voice: DAVID_VOICE,    label: `LemonFox/${DAVID_VOICE} (primary)` },
+    { voice: FALLBACK_VOICE, label: `LemonFox/${FALLBACK_VOICE} (fallback)` },
   ];
 
   let lastStatus = 500;
@@ -95,7 +93,7 @@ export default async function handler(req: any, res: any) {
   for (const attempt of attempts) {
     console.log(`[Speech API] Trying ${attempt.label}...`);
     try {
-      const response = await callElevenLabs(apiKey, attempt.voiceId, text, attempt.model);
+      const response = await callLemonFox(apiKey, attempt.voice, text);
 
       if (response.ok) {
         console.log(`[Speech API] Success with ${attempt.label}`);
@@ -113,35 +111,35 @@ export default async function handler(req: any, res: any) {
         `[Speech API] ${attempt.label} failed: HTTP ${lastStatus} — ${lastBody.substring(0, 300)}`,
       );
 
-      // 402 = quota exhausted — no point retrying other voices/models
-      if (lastStatus === 402) {
-        console.error('[Speech API] 402 — ElevenLabs quota exhausted or subscription lapsed');
-        return res.status(402).json({
-          error: 'ElevenLabs quota exhausted. Check billing at elevenlabs.io.',
-          details: lastBody,
-        });
-      }
-
       // 401 = bad API key — no point retrying
       if (lastStatus === 401) {
-        console.error('[Speech API] 401 — Invalid ELEVENLABS_API_KEY');
+        console.error('[Speech API] 401 — Invalid LEMONFOX_API_KEY');
         return res.status(401).json({
-          error: 'ElevenLabs API key is invalid. Check ELEVENLABS_API_KEY in Vercel env vars.',
+          error: 'LemonFox API key is invalid. Check LEMONFOX_API_KEY in Vercel env vars.',
           details: lastBody,
         });
       }
 
-      // Otherwise continue to next tier
+      // 402 / 429 = quota or rate limit — no point retrying
+      if (lastStatus === 402 || lastStatus === 429) {
+        console.error(`[Speech API] ${lastStatus} — LemonFox quota or rate limit hit`);
+        return res.status(lastStatus).json({
+          error: 'LemonFox quota exhausted or rate limit hit. Check billing at lemonfox.ai.',
+          details: lastBody,
+        });
+      }
+
+      // Otherwise continue to fallback voice
     } catch (fetchErr: any) {
       console.error(`[Speech API] ${attempt.label} threw: ${fetchErr.message}`);
       lastBody = fetchErr.message;
     }
   }
 
-  // All 3 tiers failed
-  console.error(`[Speech API] All tiers failed. Last status: ${lastStatus}. Last body: ${lastBody.substring(0, 500)}`);
+  // Both tiers failed
+  console.error(`[Speech API] All attempts failed. Last status: ${lastStatus}. Last body: ${lastBody.substring(0, 500)}`);
   return res.status(500).json({
-    error: 'All ElevenLabs TTS attempts failed',
+    error: 'All LemonFox TTS attempts failed',
     lastStatus,
     details: lastBody,
   });
