@@ -6,7 +6,7 @@ import { createServer as createViteServer } from "vite";
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
-import { DAVID_PERSONALITY_PROMPT, DAVID_CHAT_TEMPERATURE } from './src/constants/davidPersona';
+import { DAVID_PERSONALITY_PROMPT, DAVID_CHAT_TEMPERATURE } from './src/constants/persona';
 import { buildDavidSystemPromptWithMood, resolveMoodKey } from './src/utils/davidMoodContext';
 import {
   CARTESIA_API_VERSION,

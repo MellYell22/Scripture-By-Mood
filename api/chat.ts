@@ -1,5 +1,5 @@
 import OpenAI from 'openai';
-import { DAVID_CHAT_TEMPERATURE } from '../src/constants/davidPersona';
+import { DAVID_CHAT_TEMPERATURE } from '../src/constants/persona';
 import { buildDavidSystemPromptWithMood, resolveMoodKey } from '../src/utils/davidMoodContext';
 
 export default async function handler(req: any, res: any) {

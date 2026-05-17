@@ -1,5 +1,5 @@
 import { buildDavidScriptureResponse, MOODS_DATA } from '../constants/moods';
-import { DAVID_PERSONALITY_PROMPT } from '../constants/davidPersona';
+import { DAVID_PERSONALITY_PROMPT } from '../constants/persona';
 
 type ChatLikeMessage = {
   role?: string;

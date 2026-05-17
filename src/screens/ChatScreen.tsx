@@ -5,7 +5,7 @@ import { getChatResponseStream, generateSpeech, ChatHistoryMessage } from '../se
 import { ChatMessage } from '../types';
 import { saveAIFeedback } from '../services/supabase';
 import { useUser } from '../UserContext';
-import { DAVID_CHAT_GREETINGS } from '../constants/davidPersona';
+import { DAVID_CHAT_GREETINGS } from '../constants/persona';
 
 export default function ChatScreen({ navigation, route }: any) {
   const { profile } = useUser();

@@ -17,7 +17,7 @@ import {
   looksLikeBannedTherapyPhrase,
   normalizeTranscript,
 } from '../utils/voiceTranscript';
-import { getVoiceSessionGreeting, DAVID_ANTI_REPEAT_FALLBACKS } from '../constants/davidPersona';
+import { getVoiceSessionGreeting, DAVID_ANTI_REPEAT_FALLBACKS } from '../constants/persona';
 import { humanizeForTts, preSpeechThinkingDelay } from '../utils/davidSpeechDelivery';
 
 const TTS_START_TIMEOUT_MS = 2000;
@@ -59,7 +59,7 @@ const cleanFirstName = (value?: string | null): string => {
   return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
 };
 
-// David personality prompt: src/constants/davidPersona.ts (api/chat.ts + server.ts)
+// David personality prompt: src/constants/persona.ts (api/chat.ts + server.ts)
 
 export default function VoiceScreen({ route, navigation }: any) {
   const { profile, session } = useUser();
@@ -538,7 +538,7 @@ export default function VoiceScreen({ route, navigation }: any) {
     log('TTS started', `${text.length} chars`);
 
     try {
-      await preSpeechThinkingDelay(false);
+      await preSpeechThinkingDelay();
       const audioUrl = await generateSpeech(text, { skipHumanize: true });
 
       if (!audioUrl) {
