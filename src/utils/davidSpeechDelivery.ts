@@ -118,6 +118,62 @@ const lightlyShortenRunOn = (text: string): string => {
   return firstTwo.length >= 28 ? firstTwo : text;
 };
 
+// Add SSML support for fine-grained control over speech delivery
+const addSsmlTags = (text: string): string => {
+  let t = text;
+
+  // Add pauses for commas and periods
+  t = t.replace(/,/g, '<break time="300ms"/>');
+  t = t.replace(/\./g, '<break time="500ms"/>');
+
+  // Emphasize key emotional words
+  t = t.replace(/\b(anxious|afraid|sad|lonely|guilt|ashamed|overwhelmed|tired|grief|lost|hurt|heavy|panic|worried|depressed)\b/gi, '<emphasis level="moderate">$1</emphasis>');
+
+  return t;
+};
+
+// Adjust pacing dynamically based on sentence length and emotional content
+const adjustPacing = (text: string): string => {
+  const words = text.split(' ');
+  const wordCount = words.length;
+
+  if (wordCount < 10) {
+    return `<prosody rate="slow">${text}</prosody>`;
+  } else if (wordCount > 20) {
+    return `<prosody rate="fast">${text}</prosody>`;
+  }
+
+  return `<prosody rate="medium">${text}</prosody>`;
+};
+
+// Refine punctuation handling for smoother sentence flow
+const refinePunctuation = (text: string): string => {
+  let t = text;
+
+  // Reduce over-punctuation and abrupt stops
+  t = t.replace(/\s*[;:]+\s*/g, ', '); // Replace semicolons/colons with commas
+  t = t.replace(/\s+[–—]+\s+/g, ', '); // Replace dashes with commas
+  t = t.replace(/\s+-\s+/g, ', '); // Replace hyphens with commas
+  t = t.replace(/,{2,}/g, ','); // Remove duplicate commas
+  t = t.replace(/\s+,/g, ','); // Remove spaces before commas
+
+  return t;
+};
+
+// Adjust response chunking for conversational rhythm
+const chunkForRhythm = (text: string): string => {
+  const sentences = text.split(/(?<=[.!?])\s+/); // Split by sentence boundaries
+
+  return sentences
+    .map((sentence, index) => {
+      if (index === sentences.length - 1) return sentence; // Keep the last sentence as is
+
+      // Add a slight pause between sentences for rhythm
+      return `${sentence},`;
+    })
+    .join(' ');
+};
+
 export function humanizeForTts(
   text: string,
   options: HumanizeOptions = {},
@@ -218,7 +274,7 @@ export function prepareDavidTtsPayload(
  */
 export function preSpeechThinkingDelay(text = ''): Promise<void> {
   const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
-  const emotionalCue = /\b(anxious|afraid|sad|lonely|guilt|ashamed|overwhelmed|grief|hurt|heavy|panic|worried|tired)\b/i.test(text);
+  const emotionalCue = /\b(anxious|afraid|sad|lonely|guilt|ashamed|overwhelmed|grief|hurt|heavy|panic|worried|depressed)\b/i.test(text);
   const base = emotionalCue ? 620 : 420;
   const lengthAdjustment = wordCount <= 10 ? 260 : wordCount >= 35 ? -80 : 80;
   const jitter = Math.floor(Math.random() * 260);
@@ -226,3 +282,14 @@ export function preSpeechThinkingDelay(text = ''): Promise<void> {
 
   return new Promise(resolve => setTimeout(resolve, delayMs));
 }
+
+// Integrate refined pacing and rhythm adjustments
+export const enhanceSpeechDelivery = (text: string): string => {
+  let enhancedText = softenPunctuationForTts(text);
+  enhancedText = softenShortInternalStops(enhancedText);
+  enhancedText = joinLineBreaksConversationally(enhancedText);
+  enhancedText = refinePunctuation(enhancedText);
+  enhancedText = chunkForRhythm(enhancedText);
+
+  return enhancedText;
+};
