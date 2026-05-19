@@ -146,21 +146,26 @@ const adjustPacing = (text: string): string => {
   return `<prosody rate="medium">${text}</prosody>`;
 };
 
-// Refine punctuation handling for smoother sentence flow
+// Further refine punctuation handling for natural sentence flow
 const refinePunctuation = (text: string): string => {
   let t = text;
 
-  // Reduce over-punctuation and abrupt stops
-  t = t.replace(/\s*[;:]+\s*/g, ', '); // Replace semicolons/colons with commas
-  t = t.replace(/\s+[–—]+\s+/g, ', '); // Replace dashes with commas
-  t = t.replace(/\s+-\s+/g, ', '); // Replace hyphens with commas
-  t = t.replace(/,{2,}/g, ','); // Remove duplicate commas
-  t = t.replace(/\s+,/g, ','); // Remove spaces before commas
+  // Replace semicolons, colons, and dashes with commas for smoother flow
+  t = t.replace(/\s*[;:]+\s*/g, ', ');
+  t = t.replace(/\s+[–—]+\s+/g, ', ');
+  t = t.replace(/\s+-\s+/g, ', ');
 
-  return t;
+  // Remove duplicate commas and unnecessary spaces
+  t = t.replace(/,{2,}/g, ',');
+  t = t.replace(/\s+,/g, ',');
+
+  // Ensure proper spacing after punctuation
+  t = t.replace(/([.!?])(?=\S)/g, '$1 ');
+
+  return t.trim();
 };
 
-// Adjust response chunking for conversational rhythm
+// Fine-tune response chunking for conversational rhythm
 const chunkForRhythm = (text: string): string => {
   const sentences = text.split(/(?<=[.!?])\s+/); // Split by sentence boundaries
 
