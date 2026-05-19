@@ -39,13 +39,20 @@ const BANNED_THERAPY_PHRASE_PATTERNS = [
   /^tell me more/i,
   /^it sounds like you/i,
   /^you seem (like you|deep)/i,
-  /^i'?m (here for you|here to listen)/i,
+  /^i'?m (here for you|here to listen|here to support|happy to help)/i,
   /^i'?m glad you/i,
-  /^that must be hard/i,
-  /^how can i help/i,
+  /^that must be (hard|difficult|challenging)/i,
+  /^thank you for (sharing|telling)/i,
+  /^how can i (help|assist|support)/i,
   /^you are not alone/i,
   /^good to hear from you/i,
   /^you'?ve got something on your mind/i,
+  /^as an ai/i,
+  /^i understand (that )?you/i,
+  /^let'?s explore/i,
+  /^it is important to remember/i,
+  /^here are (some|a few|three)/i,
+  /^in conclusion/i,
 ];
 
 export const MIN_MEANINGFUL_WORDS = 2;

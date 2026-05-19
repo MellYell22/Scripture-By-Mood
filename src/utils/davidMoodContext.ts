@@ -7,16 +7,17 @@ type ChatLikeMessage = {
 };
 
 const MOOD_KEYWORDS: Record<string, string[]> = {
-  ANXIOUS: ['anxious', 'anxiety', 'panic', 'worried', 'worry', 'nervous', 'fearful', 'scared'],
-  SAD: ['sad', 'down', 'depressed', 'blue', 'unhappy', 'heavy'],
-  LONELY: ['lonely', 'alone', 'isolated', 'left out', 'by myself'],
-  STRESSED: ['stressed', 'stress', 'pressure', 'burned out', 'burnt out'],
-  OVERWHELMED: ['overwhelmed', 'too much', 'buried', 'drowning'],
-  HOPELESS: ['hopeless', 'no hope', 'pointless', 'give up', 'worthless'],
-  GRIEVING: ['grieving', 'grief', 'loss', 'lost someone', 'mourning', 'died', 'passed away'],
-  ANGRY: ['angry', 'mad', 'furious', 'resentful', 'rage'],
-  NUMB: ['numb', 'empty', 'nothing', 'disconnected'],
-  CONFUSED: ['confused', 'lost', 'uncertain', 'unsure', "don't know what to do"],
+  ANXIOUS: ['anxious', 'anxiety', 'panic', 'panicking', 'worried', 'worry', 'nervous', 'fearful', 'scared', 'afraid', 'spiraling', 'restless'],
+  SAD: ['sad', 'down', 'depressed', 'blue', 'unhappy', 'heavy', 'crying', 'hurt', 'heartbroken'],
+  LONELY: ['lonely', 'alone', 'isolated', 'left out', 'by myself', 'nobody', 'unseen', 'forgotten'],
+  GUILTY: ['guilty', 'guilt', 'ashamed', 'shame', 'regret', 'condemned', 'failed god', 'not good enough'],
+  STRESSED: ['stressed', 'stress', 'pressure', 'burned out', 'burnt out', 'exhausted', 'tired'],
+  OVERWHELMED: ['overwhelmed', 'too much', 'buried', 'drowning', "can't handle", 'falling apart'],
+  HOPELESS: ['hopeless', 'no hope', 'pointless', 'give up', 'worthless', "can't go on"],
+  GRIEVING: ['grieving', 'grief', 'loss', 'lost someone', 'mourning', 'died', 'passed away', 'miss them'],
+  ANGRY: ['angry', 'mad', 'furious', 'resentful', 'rage', 'bitter'],
+  NUMB: ['numb', 'empty', 'nothing', 'disconnected', "don't feel anything"],
+  CONFUSED: ['confused', 'lost', 'uncertain', 'unsure', "don't know what to do", 'stuck'],
   HOPEFUL: ['hopeful', 'hope', 'encouraged'],
   GRATEFUL: ['grateful', 'thankful', 'blessed'],
   JOYFUL: ['joyful', 'happy', 'joy', 'excited'],
@@ -28,6 +29,8 @@ function normalizeMoodKey(value?: string | null): string | null {
   const normalized = value.trim().toUpperCase().replace(/[\s-]+/g, '_');
   const directMatch = MOODS_DATA.find((mood) => mood.key === normalized);
   if (directMatch) return directMatch.key;
+
+  if (MOOD_KEYWORDS[normalized]) return normalized;
 
   const labelMatch = MOODS_DATA.find((mood) => mood.label.toUpperCase() === normalized);
   return labelMatch?.key ?? null;
@@ -74,15 +77,18 @@ export function buildDavidSystemPromptWithMood(moodKey?: string | null): string 
   if (!normalizedMoodKey) return DAVID_PERSONALITY_PROMPT;
 
   const scriptureContext = buildDavidScriptureResponse(normalizedMoodKey);
-  if (!scriptureContext) return DAVID_PERSONALITY_PROMPT;
+  const scriptureSection = scriptureContext
+    ? `\n\n${scriptureContext}`
+    : '';
 
   return `${DAVID_PERSONALITY_PROMPT}
+CURRENT EMOTIONAL THREAD:
+The user may be feeling ${normalizedMoodKey.toLowerCase()}.
 
-CURRENT MOOD CONTEXT:
-The user appears to be feeling ${normalizedMoodKey.toLowerCase()}.
-Here is how you might naturally bring scripture into this conversation:
+Respond as if you noticed this from their voice and words, not as if you are labeling them. Do not say, "It sounds like you're feeling..." or clinically name the emotion unless the user named it first.
 
-${scriptureContext}
+Use this scripture material only as quiet inspiration. If you mention scripture, connect it to the user's emotional moment in one natural sentence. Do not list verses, preach, or over-explain.
+${scriptureSection}
 
-Use this as inspiration — don't copy it verbatim. Let it inform your natural response.`;
+Best voice pattern for this moment: brief acknowledgement, one gentle spiritual thought, then stop or ask one small question.`;
 }

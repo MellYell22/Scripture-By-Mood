@@ -84,16 +84,41 @@ export interface ChatHistoryMessage {
   content: string;
 }
 
+const buildVoiceConversationContext = (history: ChatHistoryMessage[]): string => {
+  const recent = history.slice(-6);
+  const lastUser = [...recent].reverse().find(message => message.role === 'user')?.content || '';
+  const previousAssistant = [...recent].reverse().find(message => message.role === 'assistant')?.content || '';
+
+  const emotionalWords = [
+    'anxious', 'anxiety', 'panic', 'afraid', 'worried', 'sad', 'lonely', 'alone',
+    'guilty', 'ashamed', 'overwhelmed', 'tired', 'grief', 'grieving', 'angry',
+    'hurt', 'numb', 'lost', 'confused', 'hopeful', 'thankful', 'peaceful'
+  ];
+  const emotionalThread = recent
+    .filter(message => message.role === 'user')
+    .map(message => message.content)
+    .find(content => emotionalWords.some(word => content.toLowerCase().includes(word))) || '';
+
+  return [
+    lastUser ? `Latest user words: ${lastUser}` : '',
+    emotionalThread ? `Emotional thread to remember quietly: ${emotionalThread}` : '',
+    previousAssistant ? `Do not repeat David's last wording: ${previousAssistant}` : '',
+    'Continue the live voice conversation. Follow the user\'s current direction, avoid restarting, and keep the next spoken turn short.'
+  ].filter(Boolean).join('\n');
+};
+
 export const getChatResponse = async (
   history: ChatHistoryMessage[],
   responseLength: ResponseLength = 'short',
   moodKey?: string,
 ): Promise<string> => {
   const lengthInstruction = {
-    short: "Reply in 1-2 short lines. Sound like a real person talking — use ellipsis pauses sometimes (hey… / yeah…). Imperfect, not polished. No therapy phrases.",
-    medium: "Reply in 2-3 short sentences with varied rhythm. Natural pauses via ellipsis okay. Stay grounded. No validation loops.",
-    long: "Reply in 3 short sentences max. Conversational and alive — not scripted. Ellipsis pauses okay. No corporate empathy."
+    short: "Voice turn: 6-28 words when possible. One natural spoken beat, maybe two. No lists, no greeting, no customer-support language.",
+    medium: "Voice turn: 1-2 short sentences. Human rhythm, modest pauses, no polished paragraph, no validation formula.",
+    long: "Voice turn: 2-3 short sentences max. Give the simple answer first, then stop. No sermon, no bullet list."
   }[responseLength];
+
+  const voiceContext = buildVoiceConversationContext(history);
 
   // Map history to OpenAI format (Gemini uses 'model', OpenAI uses 'assistant')
   const messages = history.map(h => ({
@@ -110,7 +135,7 @@ export const getChatResponse = async (
   const response = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages, moodKey })
+    body: JSON.stringify({ messages, moodKey, voiceContext })
   });
 
   if (!response.ok) {
@@ -130,10 +155,12 @@ export const getChatResponseStream = async (
   moodKey?: string,
 ): Promise<string> => {
   const lengthInstruction = {
-    short: "Reply in 1-2 short lines. Sound like a real person talking — use ellipsis pauses sometimes (hey… / yeah…). Imperfect, not polished. No therapy phrases.",
-    medium: "Reply in 2-3 short sentences with varied rhythm. Natural pauses via ellipsis okay. Stay grounded. No validation loops.",
-    long: "Reply in 3 short sentences max. Conversational and alive — not scripted. Ellipsis pauses okay. No corporate empathy."
+    short: "Voice turn: 6-28 words when possible. One natural spoken beat, maybe two. No lists, no greeting, no customer-support language.",
+    medium: "Voice turn: 1-2 short sentences. Human rhythm, modest pauses, no polished paragraph, no validation formula.",
+    long: "Voice turn: 2-3 short sentences max. Give the simple answer first, then stop. No sermon, no bullet list."
   }[responseLength];
+
+  const voiceContext = buildVoiceConversationContext(history);
 
   const messages = history.map(h => ({
     role: h.role,
@@ -148,7 +175,7 @@ export const getChatResponseStream = async (
   const response = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages, stream: true, moodKey })
+    body: JSON.stringify({ messages, stream: true, moodKey, voiceContext })
   });
 
   if (!response.ok) {

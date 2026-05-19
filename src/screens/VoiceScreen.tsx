@@ -20,8 +20,9 @@ import {
 import { getVoiceSessionGreeting, DAVID_ANTI_REPEAT_FALLBACKS } from '../constants/persona';
 import { humanizeForTts, preSpeechThinkingDelay } from '../utils/davidSpeechDelivery';
 
-const TTS_START_TIMEOUT_MS = 2000;
-const POST_GREETING_MIC_DELAY_MS = 400;
+const TTS_START_TIMEOUT_MS = 2500;
+const POST_GREETING_MIC_DELAY_MS = 650;
+const INTERRUPT_RESUME_DELAY_MS = 180;
 
 // ─── Logging ────────────────────────────────────────────────────────────────
 // All voice events are prefixed with [David] for easy filtering in DevTools.
@@ -93,6 +94,7 @@ export default function VoiceScreen({ route, navigation }: any) {
   // ── Refs (never stale inside callbacks) ──────────────────────────────────
   const recognitionRef = useRef<any>(null);
   const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+  const currentAudioUrlRef = useRef<string | null>(null);
   const isConnectedRef = useRef(false);
   const isDavidSpeakingRef = useRef(false);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -115,12 +117,12 @@ export default function VoiceScreen({ route, navigation }: any) {
   // RMS thresholds — permissive enough to resume natural turn-taking after TTS.
   const SPEECH_RMS_THRESHOLD = 0.016;
   const SILENCE_RMS_THRESHOLD = 0.006;
-  const SILENCE_DURATION_MS = 1200;
-  const MIN_SPEECH_MS = 450;
+  const SILENCE_DURATION_MS = 925;
+  const MIN_SPEECH_MS = 360;
   const MIN_SUSTAINED_SPEECH_FRAMES = 3;
-  const MIN_RECORDING_MS = 800;
-  const MIN_AUDIO_BYTES = 2500;
-  const POST_TTS_MIC_DELAY_MS = 250;
+  const MIN_RECORDING_MS = 650;
+  const MIN_AUDIO_BYTES = 2200;
+  const POST_TTS_MIC_DELAY_MS = 520;
   const MIC_RESTART_BASE_MS = 250;
   const MIC_RESTART_MAX_MS = 1600;
   const NO_SPEECH_DISCARD_MS = 15000;
@@ -284,6 +286,7 @@ export default function VoiceScreen({ route, navigation }: any) {
 
       const audio = new Audio(audioUrl);
       currentAudioRef.current = audio;
+      currentAudioUrlRef.current = audioUrl;
       audio.preload = 'auto';
 
       const finishGreeting = () => {
@@ -293,6 +296,7 @@ export default function VoiceScreen({ route, navigation }: any) {
         setIsDavidSpeaking(false);
         URL.revokeObjectURL(audioUrl);
         currentAudioRef.current = null;
+        currentAudioUrlRef.current = null;
         setListeningInactive('greeting playback ended');
         beginListeningAfterGreeting(generation);
       };
@@ -527,6 +531,10 @@ export default function VoiceScreen({ route, navigation }: any) {
       currentAudioRef.current.pause();
       currentAudioRef.current = null;
     }
+    if (currentAudioUrlRef.current) {
+      URL.revokeObjectURL(currentAudioUrlRef.current);
+      currentAudioUrlRef.current = null;
+    }
 
     isDavidSpeakingRef.current = true;
     setIsDavidSpeaking(true);
@@ -537,7 +545,7 @@ export default function VoiceScreen({ route, navigation }: any) {
     log('TTS started', `${text.length} chars`);
 
     try {
-      await preSpeechThinkingDelay();
+      await preSpeechThinkingDelay(text);
       const audioUrl = await generateSpeech(text, { skipHumanize: true });
 
       if (!audioUrl) {
@@ -555,6 +563,7 @@ export default function VoiceScreen({ route, navigation }: any) {
 
       const audio = new Audio(audioUrl);
       currentAudioRef.current = audio;
+      currentAudioUrlRef.current = audioUrl;
 
       // Preload so mobile browsers have the data before play()
       audio.preload = 'auto';
@@ -575,6 +584,7 @@ export default function VoiceScreen({ route, navigation }: any) {
         setIsDavidSpeaking(false);
         URL.revokeObjectURL(audioUrl);
         currentAudioRef.current = null;
+        currentAudioUrlRef.current = null;
         if (isConnectedRef.current) {
           setListeningActive(`response playback ended — mic resumes in ${POST_TTS_MIC_DELAY_MS}ms`);
           setTimeout(() => {
@@ -593,6 +603,10 @@ export default function VoiceScreen({ route, navigation }: any) {
         isProcessingVoiceRef.current = false;
         setIsDavidSpeaking(false);
         currentAudioRef.current = null;
+        if (currentAudioUrlRef.current) {
+          URL.revokeObjectURL(currentAudioUrlRef.current);
+          currentAudioUrlRef.current = null;
+        }
         setError("Audio playback failed. This may be a browser autoplay restriction.");
         if (isConnectedRef.current) scheduleListenRetry('Playback error');
       };
@@ -608,6 +622,10 @@ export default function VoiceScreen({ route, navigation }: any) {
           isProcessingVoiceRef.current = false;
           setIsDavidSpeaking(false);
           currentAudioRef.current = null;
+          if (currentAudioUrlRef.current) {
+            URL.revokeObjectURL(currentAudioUrlRef.current);
+            currentAudioUrlRef.current = null;
+          }
           setError("Autoplay blocked. Tap anywhere on the screen and try again.");
           if (isConnectedRef.current) scheduleListenRetry('Autoplay blocked');
         });
@@ -619,9 +637,43 @@ export default function VoiceScreen({ route, navigation }: any) {
       isDavidSpeakingRef.current = false;
       isProcessingVoiceRef.current = false;
       setIsDavidSpeaking(false);
+      if (currentAudioUrlRef.current) {
+        URL.revokeObjectURL(currentAudioUrlRef.current);
+        currentAudioUrlRef.current = null;
+      }
       setError("David's voice encountered an unexpected error.");
       if (isConnectedRef.current) scheduleListenRetry('TTS exception');
     }
+  };
+
+  const interruptDavidAndListen = (reason = 'user interrupted playback') => {
+    if (!isConnectedRef.current) return;
+    if (!isDavidSpeakingRef.current && !isProcessingVoiceRef.current) return;
+
+    log('David interrupted', reason);
+    addLog('David paused — listening now');
+
+    if (currentAudioRef.current) {
+      try { currentAudioRef.current.pause(); } catch (e) { }
+      currentAudioRef.current = null;
+    }
+    if (currentAudioUrlRef.current) {
+      URL.revokeObjectURL(currentAudioUrlRef.current);
+      currentAudioUrlRef.current = null;
+    }
+
+    isDavidSpeakingRef.current = false;
+    isProcessingVoiceRef.current = false;
+    setIsDavidSpeaking(false);
+    setIsDavidThinking(false);
+    clearListenRetry();
+    setListeningActive('interruption accepted — microphone resuming');
+
+    setTimeout(() => {
+      if (isConnectedRef.current && !isDavidSpeakingRef.current && !isProcessingVoiceRef.current) {
+        startListening();
+      }
+    }, INTERRUPT_RESUME_DELAY_MS);
   };
 
   // ── Silence detection helper ──────────────────────────────────────────────
@@ -987,6 +1039,10 @@ export default function VoiceScreen({ route, navigation }: any) {
       try { currentAudioRef.current.pause(); } catch (e) { }
       currentAudioRef.current = null;
     }
+    if (currentAudioUrlRef.current) {
+      URL.revokeObjectURL(currentAudioUrlRef.current);
+      currentAudioUrlRef.current = null;
+    }
     if (audioProcessorRef.current) {
       try { audioProcessorRef.current.disconnect(); } catch (e) { }
       audioProcessorRef.current = null;
@@ -1089,9 +1145,11 @@ export default function VoiceScreen({ route, navigation }: any) {
           style={[styles.mainCircle, isConnected && styles.mainActive,
           conversationState === 'listening' && styles.mainListening]}
           onPress={() => {
-            // Mic button is now visual only - no manual send needed
+            if (isDavidSpeaking || isDavidThinking || conversationState === 'processing') {
+              interruptDavidAndListen('main voice button pressed');
+            }
           }}
-          disabled={true}
+          disabled={!isConnected || conversationState === 'listening'}
           activeOpacity={0.8}
         >
           {isConnected ? (
@@ -1118,9 +1176,9 @@ export default function VoiceScreen({ route, navigation }: any) {
         <View style={styles.statusContainer}>
           <Text style={styles.statusText}>
             {isDavidSpeaking
-              ? 'David is speaking…'
+              ? 'David is speaking… tap the circle to interrupt'
               : isDavidThinking
-                ? 'David is reflecting…'
+                ? 'David is reflecting… tap the circle to interrupt'
                 : conversationState === 'listening'
                   ? 'Listening…'
                   : 'Processing…'}
