@@ -21,8 +21,23 @@ import { getVoiceSessionGreeting, DAVID_ANTI_REPEAT_FALLBACKS } from '../constan
 import { humanizeForTts, preSpeechThinkingDelay } from '../utils/davidSpeechDelivery';
 
 const TTS_START_TIMEOUT_MS = 2500;
+const LLM_RESPONSE_TIMEOUT_MS = 20000;
+const TTS_RESPONSE_TIMEOUT_MS = 14000;
 const POST_GREETING_MIC_DELAY_MS = 650;
 const INTERRUPT_RESUME_DELAY_MS = 180;
+
+const withTimeout = async <T,>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> => {
+  let timeoutId: ReturnType<typeof setTimeout> | null = null;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timeoutId = setTimeout(() => reject(new Error(`${label} timed out after ${timeoutMs}ms`)), timeoutMs);
+  });
+
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId);
+  }
+};
 
 // ─── Logging ────────────────────────────────────────────────────────────────
 // All voice events are prefixed with [David] for easy filtering in DevTools.
@@ -467,12 +482,17 @@ export default function VoiceScreen({ route, navigation }: any) {
     setConversationState('processing');
 
     try {
-      log('response requested', `history length: ${history.length}`);
+      log('LLM request started', `history length: ${history.length}`);
+      addLog('David is thinking…');
 
-      const response = await getChatResponse(
-        history,
-        profile?.preferred_response_length || 'short',
-        route?.params?.mood,
+      const response = await withTimeout(
+        getChatResponse(
+          history,
+          profile?.preferred_response_length || 'short',
+          route?.params?.mood,
+        ),
+        LLM_RESPONSE_TIMEOUT_MS,
+        'David response'
       );
 
       if (!response || !response.trim()) {
@@ -484,7 +504,8 @@ export default function VoiceScreen({ route, navigation }: any) {
         return;
       }
 
-      log('AI response received', response.substring(0, 80) + (response.length > 80 ? '…' : ''));
+      log('AI response received — sending to TTS', response.substring(0, 80) + (response.length > 80 ? '…' : ''));
+      addLog('David response received — preparing voice…');
 
       // ── Response guards — swap bad lines for a short fallback (never silent retry) ──
       let finalResponse = response;
@@ -546,7 +567,13 @@ export default function VoiceScreen({ route, navigation }: any) {
 
     try {
       await preSpeechThinkingDelay(text);
-      const audioUrl = await generateSpeech(text, { skipHumanize: true });
+      log('TTS request started', `${text.length} chars`);
+      addLog('Generating David’s voice…');
+      const audioUrl = await withTimeout(
+        generateSpeech(text, { skipHumanize: true }),
+        TTS_RESPONSE_TIMEOUT_MS,
+        'David voice generation'
+      );
 
       if (!audioUrl) {
         log('TTS returned null — no audio URL');
@@ -972,7 +999,8 @@ export default function VoiceScreen({ route, navigation }: any) {
         setMicErrorCount(0);
         setError(null);
         emptyTranscriptStreakRef.current = 0;
-        handleVoiceInput(transcript);
+        addLog('Transcript accepted — sending to David…');
+        await handleVoiceInput(transcript);
 
       } catch (err: any) {
         log('Whisper transcription error', err?.message);

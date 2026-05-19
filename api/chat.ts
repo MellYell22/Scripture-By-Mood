@@ -2,6 +2,8 @@ import OpenAI from 'openai';
 import { DAVID_CHAT_TEMPERATURE } from '../src/constants/persona';
 import { buildDavidSystemPromptWithMood, resolveMoodKey } from '../src/utils/davidMoodContext';
 
+const DAVID_CHAT_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
+
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -45,7 +47,7 @@ export default async function handler(req: any, res: any) {
       res.setHeader('Connection', 'keep-alive');
 
       const completion = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
+        model: DAVID_CHAT_MODEL,
         messages: [systemMessage, ...messages],
         stream: true,
         temperature: DAVID_CHAT_TEMPERATURE,
@@ -64,7 +66,7 @@ export default async function handler(req: any, res: any) {
       res.end();
     } else {
       const completion = await openai.chat.completions.create({
-        model: 'gpt-4o-mini',
+        model: DAVID_CHAT_MODEL,
         messages: [systemMessage, ...messages],
         temperature: DAVID_CHAT_TEMPERATURE,
         presence_penalty: 0.35,

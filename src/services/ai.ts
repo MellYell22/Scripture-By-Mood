@@ -139,8 +139,8 @@ export const getChatResponse = async (
   });
 
   if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.message || 'Failed to get chat response');
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.message || error.error || `Failed to get chat response (${response.status})`);
   }
 
   console.log("OPENAI RESPONSE RECEIVED - Chat");
@@ -179,7 +179,8 @@ export const getChatResponseStream = async (
   });
 
   if (!response.ok) {
-    throw new Error('Failed to get chat stream');
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.message || error.error || `Failed to get chat stream (${response.status})`);
   }
 
   console.log("OPENAI RESPONSE RECEIVED - Chat Stream Start");
