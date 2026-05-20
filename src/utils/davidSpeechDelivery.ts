@@ -53,7 +53,7 @@ const joinLineBreaksConversationally = (text: string): string => {
   const lines = text
     .replace(/\r\n?/g, '\n')
     .split(/\n+/)
-    .map(line => line.replace(/^\s*(?:[-*•]|\d+[.)])\s+/, '').trim())
+    .map(line => line.replace(/^[\s*-•\d+.)]+/, '').trim())
     .filter(Boolean);
 
   if (lines.length <= 1) return text;
@@ -63,9 +63,9 @@ const joinLineBreaksConversationally = (text: string): string => {
       const isLast = index === lines.length - 1;
       let current = line.replace(/[;:]+$/g, '');
 
-      if (!isLast && !/[!?]$/.test(current)) {
-        current = current.replace(/[.]+$/g, '');
-        return `${current},`;
+      // Only add pauses at true sentence boundaries
+      if (!isLast && !/[.!?]$/.test(current)) {
+        return `${current}`; // No artificial stops
       }
 
       return current;
@@ -76,13 +76,14 @@ const joinLineBreaksConversationally = (text: string): string => {
 const softenPunctuationForTts = (text: string): string => {
   let t = protectDecimalPoints(text);
 
+  // Remove unnecessary pauses and ensure natural sentence flow
   t = t.replace(/\.{3,}|…/g, ', ');
-  t = t.replace(/\s*[;:]\s*/g, ', ');
-  t = t.replace(/\s+[–—]\s+/g, ', ');
+  t = t.replace(/\s*[;:]+\s*/g, ', ');
+  t = t.replace(/\s+[–—]+\s+/g, ', ');
   t = t.replace(/\s+-\s+/g, ', ');
   t = t.replace(/,{2,}/g, ',');
   t = t.replace(/\s+,/g, ',');
-  t = t.replace(/,\s*(and|but|so|because|then)\b/gi, ', $1');
+  t = t.replace(/([.!?])(?=\S)/g, '$1 '); // Ensure space after sentence-ending punctuation
 
   return restoreDecimalPoints(t);
 };
