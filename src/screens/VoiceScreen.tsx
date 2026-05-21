@@ -106,6 +106,7 @@ export default function VoiceScreen({ route, navigation }: any) {
   const [textInput, setTextInput] = useState('');
   const [showTextFallback, setShowTextFallback] = useState(false);
   const [micErrorCount, setMicErrorCount] = useState(0);
+  const [profileAccessCheckComplete, setProfileAccessCheckComplete] = useState(false);
 
   // ── Refs (never stale inside callbacks) ──────────────────────────────────
   const recognitionRef = useRef<any>(null);
@@ -175,6 +176,23 @@ export default function VoiceScreen({ route, navigation }: any) {
   useEffect(() => {
     userContextLoadingRef.current = userContextLoading;
   }, [userContextLoading]);
+
+  useEffect(() => {
+    if (!session?.user?.id || profile) {
+      setProfileAccessCheckComplete(Boolean(profile) || !session?.user?.id);
+      return;
+    }
+
+    let cancelled = false;
+    setProfileAccessCheckComplete(false);
+    void refreshProfile(false).finally(() => {
+      if (!cancelled) setProfileAccessCheckComplete(true);
+    });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [session?.user?.id, profile, refreshProfile]);
 
   const clearListenRetry = () => {
     if (listenRetryTimeoutRef.current) {
@@ -1053,6 +1071,8 @@ export default function VoiceScreen({ route, navigation }: any) {
       setConversationState('processing');
       addLog('Transcribing…');
       isProcessingVoiceRef.current = true;
+      const transcriptionGeneration = sessionGenerationRef.current;
+      const transcriptionTurnId = activeVoiceTurnRef.current;
       log('Transcription request sent', `${audioBlob.size} bytes`);
 
       try {
@@ -1072,6 +1092,14 @@ export default function VoiceScreen({ route, navigation }: any) {
         const data = await response.json();
         const transcript = data.transcript?.trim() || '';
         log('Transcript received', `"${transcript}"`);
+
+        if (
+          !isSessionGenerationActive(transcriptionGeneration) ||
+          activeVoiceTurnRef.current !== transcriptionTurnId
+        ) {
+          log('Transcript ignored — voice turn was interrupted');
+          return;
+        }
 
         isProcessingVoiceRef.current = false;
 
@@ -1105,6 +1133,13 @@ export default function VoiceScreen({ route, navigation }: any) {
         await handleVoiceInput(transcript);
 
       } catch (err: any) {
+        if (
+          !isSessionGenerationActive(transcriptionGeneration) ||
+          activeVoiceTurnRef.current !== transcriptionTurnId
+        ) {
+          log('Transcription error ignored — voice turn was interrupted', err?.message);
+          return;
+        }
         log('Whisper transcription error', err?.message);
         addLog(`Transcription error: ${err?.message}`);
         isProcessingVoiceRef.current = false;
@@ -1217,7 +1252,29 @@ export default function VoiceScreen({ route, navigation }: any) {
   };
 
   // ── Locked screen (non-Pro) ───────────────────────────────────────────────
-  if (!hasVoiceAccess()) {
+  const canUseVoice = hasVoiceAccess();
+  const isVoiceAccessCheckPending = Boolean(
+    session?.user?.id &&
+    !profile &&
+    !canUseVoice &&
+    !profileAccessCheckComplete
+  );
+
+  if (!canUseVoice) {
+    if (isVoiceAccessCheckPending) {
+      return (
+        <View style={styles.lockedContainer}>
+          <View style={styles.lockCard}>
+            <ActivityIndicator color="#d4af37" size="large" style={{ marginBottom: 20 }} />
+            <Text style={styles.lockTitle}>Checking Pro Access</Text>
+            <Text style={styles.lockText}>
+              We're refreshing your subscription before opening Voice with David.
+            </Text>
+          </View>
+        </View>
+      );
+    }
+
     return (
       <View style={styles.lockedContainer}>
         <View style={styles.lockCard}>

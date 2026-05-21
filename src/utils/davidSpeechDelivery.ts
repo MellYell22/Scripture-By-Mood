@@ -2,6 +2,11 @@
  * Natural voice delivery helpers for David.
  */
 
+import {
+  CARTESIA_API_VERSION as DEFAULT_CARTESIA_API_VERSION,
+  CARTESIA_MODEL_ID as DEFAULT_CARTESIA_MODEL_ID,
+} from '../constants/cartesiaVoice';
+
 export type HumanizeOptions = {
   isGreeting?: boolean;
   force?: boolean;
@@ -209,12 +214,24 @@ export const enhanceSpeechDelivery = (text: string): string => {
   return sanitizeForDavidSpeech(humanizeForTts(text));
 };
 
-// Fetch Cartesia TTS settings dynamically from environment variables
-const CARTESIA_MODEL_ID = import.meta.env?.CARTESIA_MODEL_ID || env.CARTESIA_MODEL_ID || 'default-model';
-const CARTESIA_API_VERSION = import.meta.env?.CARTESIA_API_VERSION || env.CARTESIA_API_VERSION || '2026-01-01';
-const CARTESIA_TTS_SPEED = parseFloat(import.meta.env?.CARTESIA_TTS_SPEED || env.CARTESIA_TTS_SPEED || '1.0');
-const CARTESIA_TTS_VOLUME = parseFloat(import.meta.env?.CARTESIA_TTS_VOLUME || env.CARTESIA_TTS_VOLUME || '1.0');
-const CARTESIA_TTS_EMOTION = import.meta.env?.CARTESIA_TTS_EMOTION || env.CARTESIA_TTS_EMOTION || 'neutral';
+const readClientEnv = (key: string): string | undefined => {
+  const value = import.meta.env?.[key];
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+};
+
+const readNumberClientEnv = (key: string, fallback: number): number => {
+  const value = readClientEnv(key);
+  if (!value) return fallback;
+  const parsed = Number.parseFloat(value);
+  return Number.isFinite(parsed) ? parsed : fallback;
+};
+
+// Client code can only read Vite-exposed variables. Server secrets stay in /api/speech.
+const CARTESIA_MODEL_ID = readClientEnv('VITE_CARTESIA_MODEL_ID') || DEFAULT_CARTESIA_MODEL_ID;
+const CARTESIA_API_VERSION = readClientEnv('VITE_CARTESIA_API_VERSION') || DEFAULT_CARTESIA_API_VERSION;
+const CARTESIA_TTS_SPEED = readNumberClientEnv('VITE_CARTESIA_TTS_SPEED', 1);
+const CARTESIA_TTS_VOLUME = readNumberClientEnv('VITE_CARTESIA_TTS_VOLUME', 1);
+const CARTESIA_TTS_EMOTION = readClientEnv('VITE_CARTESIA_TTS_EMOTION') || 'neutral';
 
 // Generate the speech request payload dynamically
 export function generateSpeechPayload(text: string): Record<string, any> {
