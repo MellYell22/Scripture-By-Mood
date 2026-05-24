@@ -7,8 +7,13 @@ export type HumanizeOptions = {
   force?: boolean;
 };
 
-const TRAILING_PAUSE_MARKS = /[\s。…,…,;:-]+$/;
-const SOFT_FILLER_RE = /^(mm+|hmm+|hm+|yeah|you know|i mean)[,\.\s…]+/i;
+export type PrepareTtsResult = {
+  displayText: string;
+  speechText: string;
+};
+
+const TRAILING_PAUSE_MARKS = /[\s,;:-]+$/;
+const SOFT_FILLER_RE = /^(mm+|hmm+|hm+|yeah|hey|okay|alright|you know|i mean)[,.\s]+/i;
 const SCRIPTED_MARKUP_RE =
   /\[(?:soft\s+breath|breath|inhale|exhale|sigh|pause)\]|\((?:soft\s+breath|breath|inhale|exhale|sigh|pause)\)|\*(?:soft\s+breath|breath|inhale|exhale|sigh|pause)\*/gi;
 
@@ -25,7 +30,7 @@ const ACKNOWLEDGEMENT_PERIOD_RE =
   /\b(I hear you|I'm with you|I am with you|That feels heavy|That's a lot|That is a lot|I get that|I understand)\.\s+/gi;
 
 const FILLER_PERIOD_RE =
-  /\b(mm+|hmm+|hm+|yeah|you know|i mean)\.\s+/gi;
+  /\b(mm+|hmm+|hm+|yeah|hey|okay|alright|you know|i mean)\.\s+/gi;
 
 const DECIMAL_PLACEHOLDER = '__DAVID_DECIMAL_POINT__';
 
@@ -46,44 +51,30 @@ const shouldMaybeAddOpener = (text: string, options: HumanizeOptions): boolean =
       text,
     );
 
-  return emotionalCue ? Math.random() < 0.22 : Math.random() < 0.06;
+  return emotionalCue ? Math.random() < 0.26 : Math.random() < 0.08;
 };
 
 const joinLineBreaksConversationally = (text: string): string => {
   const lines = text
     .replace(/\r\n?/g, '\n')
     .split(/\n+/)
-    .map(line => line.replace(/^[\s*-•\d+.)]+/, '').trim())
+    .map(line => line.replace(/^[\s*-\d+.)]+/, '').trim())
     .filter(Boolean);
 
-  if (lines.length <= 1) return text;
-
-  return lines
-    .map((line, index) => {
-      const isLast = index === lines.length - 1;
-      let current = line.replace(/[;:]+$/g, '');
-
-      // Only add pauses at true sentence boundaries
-      if (!isLast && !/[.!?]$/.test(current)) {
-        return `${current}`; // No artificial stops
-      }
-
-      return current;
-    })
-    .join(' ');
+  return lines.length <= 1 ? text : lines.join(' ');
 };
 
 const softenPunctuationForTts = (text: string): string => {
   let t = protectDecimalPoints(text);
 
-  // Remove unnecessary pauses and ensure natural sentence flow
-  t = t.replace(/\.{3,}|…/g, ', ');
+  t = t.replace(/[\u201c\u201d]/g, '"').replace(/[\u2018\u2019]/g, "'");
+  t = t.replace(/\s*[\u2013\u2014]\s*/g, ', ');
   t = t.replace(/\s*[;:]+\s*/g, ', ');
-  t = t.replace(/\s+[–—]+\s+/g, ', ');
   t = t.replace(/\s+-\s+/g, ', ');
+  t = t.replace(/\.{4,}/g, '...');
   t = t.replace(/,{2,}/g, ',');
   t = t.replace(/\s+,/g, ',');
-  t = t.replace(/([.!?])(?=\S)/g, '$1 '); // Ensure space after sentence-ending punctuation
+  t = t.replace(/([.!?])(?=\S)/g, '$1 ');
 
   return restoreDecimalPoints(t);
 };
@@ -120,23 +111,28 @@ const lightlyShortenRunOn = (text: string): string => {
   return firstTwo.length >= 28 ? firstTwo : text;
 };
 
-export function humanizeForTts(
-  text: string,
-  options: HumanizeOptions = {},
-): string {
-  if (!text) return '';
-
+function preparePlainSpeechText(text: string): string {
   let t = text.trim();
 
   t = t.replace(SCRIPTED_MARKUP_RE, '');
   t = joinLineBreaksConversationally(t);
-  t = t.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
   t = t.replace(/!{2,}/g, '!');
   t = t.replace(/\s+/g, ' ');
   t = t.replace(/\s+([,.!?])/g, '$1');
   t = softenPunctuationForTts(t);
   t = softenShortInternalStops(t);
   t = addTinyNaturalBreaths(t);
+
+  return t.trim();
+}
+
+export function humanizeForTts(
+  text: string,
+  options: HumanizeOptions = {},
+): string {
+  if (!text) return '';
+
+  let t = preparePlainSpeechText(text);
   t = lightlyShortenRunOn(t);
 
   if (shouldMaybeAddOpener(t, options)) {
@@ -150,19 +146,9 @@ export function humanizeForTts(
 export function sanitizeForDavidSpeech(text: string): string {
   if (!text) return '';
 
-  let t = text.trim();
+  let t = preparePlainSpeechText(text);
 
-  t = t.replace(SCRIPTED_MARKUP_RE, '');
-  t = joinLineBreaksConversationally(t);
-  t = t.replace(/[“”]/g, '"').replace(/[‘’]/g, "'");
-  t = t.replace(/!{2,}/g, '!');
-  t = t.replace(/\s+/g, ' ');
-  t = t.replace(/\s+([,.!?])/g, '$1');
-  t = softenPunctuationForTts(t);
-  t = softenShortInternalStops(t);
-  t = addTinyNaturalBreaths(t);
-
-  if (t.length >= 12 && t.length <= 34 && !SOFT_FILLER_RE.test(t) && Math.random() < 0.05) {
+  if (t.length >= 12 && t.length <= 34 && !SOFT_FILLER_RE.test(t) && Math.random() < 0.07) {
     const ack = SHORT_ACKNOWLEDGEMENTS[Math.floor(Math.random() * SHORT_ACKNOWLEDGEMENTS.length)];
     t = `${ack} ${t.charAt(0).toLowerCase()}${t.slice(1)}`;
   }
@@ -171,11 +157,6 @@ export function sanitizeForDavidSpeech(text: string): string {
 
   return t.trim();
 }
-
-export type PrepareTtsResult = {
-  displayText: string;
-  speechText: string;
-};
 
 export function prepareDavidTtsPayload(
   text: string,
@@ -208,42 +189,3 @@ export function preSpeechThinkingDelay(text = ''): Promise<void> {
 export const enhanceSpeechDelivery = (text: string): string => {
   return sanitizeForDavidSpeech(humanizeForTts(text));
 };
-
-// Fetch Cartesia TTS settings dynamically from environment variables
-const CARTESIA_MODEL_ID = import.meta.env?.CARTESIA_MODEL_ID || env.CARTESIA_MODEL_ID || 'default-model';
-const CARTESIA_API_VERSION = import.meta.env?.CARTESIA_API_VERSION || env.CARTESIA_API_VERSION || '2026-01-01';
-const CARTESIA_TTS_SPEED = parseFloat(import.meta.env?.CARTESIA_TTS_SPEED || env.CARTESIA_TTS_SPEED || '1.0');
-const CARTESIA_TTS_VOLUME = parseFloat(import.meta.env?.CARTESIA_TTS_VOLUME || env.CARTESIA_TTS_VOLUME || '1.0');
-const CARTESIA_TTS_EMOTION = import.meta.env?.CARTESIA_TTS_EMOTION || env.CARTESIA_TTS_EMOTION || 'neutral';
-
-// Generate the speech request payload dynamically
-export function generateSpeechPayload(text: string): Record<string, any> {
-  return {
-    modelId: CARTESIA_MODEL_ID,
-    apiVersion: CARTESIA_API_VERSION,
-    ttsSettings: {
-      speed: CARTESIA_TTS_SPEED,
-      volume: CARTESIA_TTS_VOLUME,
-      emotion: CARTESIA_TTS_EMOTION,
-    },
-    text: improveSentencePacing(text),
-  };
-}
-
-// Improve sentence pacing by splitting long responses and adding subtle pauses
-function improveSentencePacing(text: string): string {
-  const sentences = text.split(/(?<=[.!?])\s+/);
-
-  return sentences
-    .map((sentence, index) => {
-      const isLast = index === sentences.length - 1;
-
-      // Add subtle pauses between thoughts
-      if (!isLast) {
-        return `${sentence} <break time='300ms'/>`;
-      }
-
-      return sentence;
-    })
-    .join(' ');
-}
