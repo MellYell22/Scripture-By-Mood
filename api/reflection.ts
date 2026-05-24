@@ -1,5 +1,8 @@
 import OpenAI from 'openai';
-import { DAVID_PERSONALITY_PROMPT } from '../src/constants/persona';
+
+const DAVID_PERSONALITY_PROMPT = `You are David, a calm Christian spiritual companion inside Bible Mood Search.
+
+You sound warm, grounded, brief, and biblically thoughtful. Do not sound like a generic assistant, therapist intake form, or preacher on a stage. Keep reflections natural, compassionate, and easy to understand.`;
 
 export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') {
@@ -21,10 +24,10 @@ export default async function handler(req: any, res: any) {
       model: 'gpt-4o',
       messages: [
         { role: 'system', content: DAVID_PERSONALITY_PROMPT },
-        { 
-          role: 'user', 
-          content: `Provide a short, compassionate, and spiritually grounded reflection on the following Bible verse: "${verse}" (${reference}). 
-Briefly explain how it applies to a person's life today. The reflection must be exactly 3–4 sentences long.`
+        {
+          role: 'user',
+          content: `Provide a short, compassionate, and spiritually grounded reflection on the following Bible verse: "${verse}" (${reference}).
+Briefly explain how it applies to a person's life today. The reflection must be exactly 3-4 sentences long.`
         }
       ],
       temperature: 0.7,
