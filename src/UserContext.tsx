@@ -7,11 +7,35 @@ interface UserContextType {
   profile: Profile | null;
   loading: boolean;
   refreshProfile: (showLoading?: boolean) => Promise<Profile | null>;
+  continueAsGuest: (preferredTranslation?: Profile['preferred_translation']) => void;
   signOut: () => Promise<void>;
 }
 
 const PROFILE_FETCH_TIMEOUT_MS = 4500;
 const PROFILE_RETRY_DELAY_MS = 750;
+
+const createGuestSession = () => ({
+  user: {
+    id: 'guest',
+    email: 'guest@mybibleaicompanion.local',
+    app_metadata: {},
+    user_metadata: { name: 'Guest' },
+    aud: 'authenticated',
+    role: 'authenticated',
+  },
+});
+
+const createGuestProfile = (preferredTranslation: Profile['preferred_translation'] = 'NIV'): Profile => ({
+  id: 'guest',
+  email: 'guest@mybibleaicompanion.local',
+  subscription_tier: 'free',
+  created_at: new Date().toISOString(),
+  has_completed_onboarding: true,
+  preferred_translation: preferredTranslation,
+  preferred_response_length: 'medium',
+  verse_of_the_day_enabled: false,
+  verse_of_the_day_time: '08:00',
+});
 
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
@@ -109,6 +133,12 @@ export function UserProvider({ children }: { children: ReactNode }) {
     };
   }, [session?.user?.id]);
 
+  const continueAsGuest = useCallback((preferredTranslation: Profile['preferred_translation'] = 'NIV') => {
+    setSession(createGuestSession());
+    setProfile(createGuestProfile(preferredTranslation));
+    setLoading(false);
+  }, []);
+
   const fetchProfile = async (userId: string, retries = 3): Promise<Profile | null> => {
     try {
       console.log(`[UserContext] Fetching profile for ${userId}... (${retries} retries left)`);
@@ -197,13 +227,15 @@ export function UserProvider({ children }: { children: ReactNode }) {
   }, [session?.user?.id]);
 
   const signOut = async () => {
-    await supabase!.auth.signOut();
+    if (session?.user?.id !== 'guest') {
+      await supabase!.auth.signOut();
+    }
     setSession(null);
     setProfile(null);
   };
 
   return (
-    <UserContext.Provider value={{ session, profile, loading, refreshProfile, signOut }}>
+    <UserContext.Provider value={{ session, profile, loading, refreshProfile, continueAsGuest, signOut }}>
       {children}
     </UserContext.Provider>
   );
