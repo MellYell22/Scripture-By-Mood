@@ -1,0 +1,13 @@
+HTTP/1.1 400 Bad Request
+Access-Control-Allow-Headers: Content-Type
+Access-Control-Allow-Methods: POST, OPTIONS
+Access-Control-Allow-Origin: *
+Cache-Control: public, max-age=0, must-revalidate
+Content-Length: 0
+Date: Mon, 25 May 2026 07:16:03 GMT
+Server: Vercel
+Strict-Transport-Security: max-age=63072000; includeSubDomains; preload
+X-Robots-Tag: noindex
+X-Vercel-Cache: MISS
+X-Vercel-Id: yul1::iad1::v97dq-1779693363267-47fd13e6c725
+

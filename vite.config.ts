@@ -7,7 +7,11 @@ export default defineConfig(({mode}) => {
   return {
     plugins: [react(), tailwindcss()],
     define: {
+<<<<<<< HEAD
       // Only define process.env.NODE_ENV - used by @vercel/analytics and React
+=======
+      // Only define process.env.NODE_ENV — used by @vercel/analytics and React
+>>>>>>> 874b7cf (Improve David pastoral voice delivery)
       // internals for dev/prod code paths. All other process.env.* references in
       // dependencies fall through to the window.process polyfill in index.html,
       // which preserves their typeof guards correctly.

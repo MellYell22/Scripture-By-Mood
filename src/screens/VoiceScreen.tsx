@@ -119,7 +119,7 @@ export default function VoiceScreen({ route, navigation }: any) {
   const MAX_MIC_RETRIES = 1; // Show text fallback after 1 network failure (network errors are persistent)
   // Silence / speech-end detection (MediaRecorder + AudioContext)
   const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
-  const silenceTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const silenceTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isProcessingVoiceRef = useRef(false);
   const lastTranscriptRef = useRef<string>('');
   const emptyTranscriptStreakRef = useRef(0);
@@ -428,13 +428,10 @@ export default function VoiceScreen({ route, navigation }: any) {
     }
 
     const firstName = getFirstNameFromSession();
-    // Greetings use force:true — no filler prefixes (mm…, heh.) or ellipsis pauses.
-    // Humanization is intentionally disabled here because greetings are already
-    // written to sound natural, and prefixes like "heh. hey. how's your day been?"
-    // sound awkward as an opening line.
+    // Greetings are already written in David's voice, so only clean them for TTS.
     const greeting = humanizeForTts(getVoiceSessionGreeting(firstName || undefined), {
-      isGreeting: false,
-      force: true,
+      isGreeting: true,
+      skipOpener: true,
     });
     hasGreetedRef.current = true;
 
@@ -448,12 +445,20 @@ export default function VoiceScreen({ route, navigation }: any) {
 
   // ── Transcript filter helpers ────────────────────────────────────────────
   // Words that are filler/noise and should not trigger an AI response on their own.
+  // Pure filler/noise — NOT greetings or names. Greetings like "hi David" are
+  // intentional user speech and must reach the AI so David can respond naturally.
   const FILLER_WORDS = new Set([
     'um', 'uh', 'hmm', 'hm', 'ah', 'oh', 'er', 'like',
     'yeah', 'yep', 'yup', 'okay', 'ok', 'alright', 'right',
-    'hello', 'hey', 'hi', 'bye', 'goodbye',
+    'bye', 'goodbye',
     'thanks', 'thank', 'please', 'sure', 'fine', 'good', 'great',
     'yes', 'no', 'nope', 'maybe',
+  ]);
+
+  // Names / proper nouns that should never count as filler
+  const NON_FILLER_WORDS = new Set([
+    'david', 'god', 'jesus', 'lord', 'bible', 'scripture',
+    'hi', 'hey', 'hello',  // greetings are intentional speech
   ]);
 
   // Returns true if the transcript is meaningful enough to send to OpenAI.
@@ -465,7 +470,7 @@ export default function VoiceScreen({ route, navigation }: any) {
 
     // Fewer than 4 words — check if any are non-filler
     if (words.length < 4) {
-      const meaningfulWords = words.filter(w => !FILLER_WORDS.has(w));
+      const meaningfulWords = words.filter(w => !FILLER_WORDS.has(w) || NON_FILLER_WORDS.has(w));
       if (meaningfulWords.length === 0) return false;
     }
 
@@ -564,21 +569,31 @@ export default function VoiceScreen({ route, navigation }: any) {
       addLog('David response received — preparing voice…');
 
       // ── Response guards — swap bad lines for a short fallback (never silent retry) ──
+      // Only apply anti-repeat when David has already spoken at least once beyond the
+      // greeting. This prevents the first real response from being swapped to a
+      // generic fallback that feels disconnected from what the user said.
       let finalResponse = response;
+      const hasHadRealExchange = messagesRef.current.filter(m => m.role === 'assistant').length >= 2;
       const pickFallback = () =>
         ANTI_REPEAT_FALLBACKS[Math.floor(Math.random() * ANTI_REPEAT_FALLBACKS.length)];
 
       if (looksLikeBannedTherapyPhrase(response)) {
-        const fallback = pickFallback();
-        log('Banned therapy phrase — swapping response', `"${response.substring(0, 60)}" → "${fallback}"`);
-        addLog('Replaced banned therapy phrase with fallback');
-        finalResponse = fallback;
+        if (hasHadRealExchange) {
+          const fallback = pickFallback();
+          log('Banned therapy phrase — swapping response', `"${response.substring(0, 60)}" → "${fallback}"`);
+          addLog('Replaced banned therapy phrase with fallback');
+          finalResponse = fallback;
+        } else {
+          // First real exchange — let it through even if imperfect; a contextual
+          // response is always better than a generic fallback.
+          log('Banned therapy phrase on first exchange — allowing through', response.substring(0, 60));
+        }
       } else if (hasGreetedRef.current && looksLikeOpeningGreeting(response)) {
         const fallback = pickFallback();
         log('Duplicate opening greeting — swapping response', `"${response.substring(0, 60)}" → "${fallback}"`);
         addLog('Replaced duplicate opening greeting with fallback');
         finalResponse = fallback;
-      } else if (isTooSimilar(lastDavidResponseRef.current, response)) {
+      } else if (hasHadRealExchange && isTooSimilar(lastDavidResponseRef.current, response)) {
         const fallback = pickFallback();
         log('Anti-repeat triggered — swapping response', `"${response.substring(0, 60)}" → "${fallback}"`);
         finalResponse = fallback;

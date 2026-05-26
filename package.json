@@ -3,10 +3,11 @@
   "private": true,
   "version": "0.0.0",
   "type": "module",
+  "packageManager": "pnpm@10.33.4",
   "scripts": {
     "dev": "tsx server.ts",
     "build": "vite build && esbuild server.ts --bundle --platform=node --format=esm --outfile=dist/server.js --external:vite --external:express --external:stripe --external:@supabase/supabase-js --external:dotenv --external:better-sqlite3",
-    "start": "NODE_ENV=production node dist/server.js",
+    "start": "node -e \"process.env.NODE_ENV='production'; import('./dist/server.js')\"",
     "clean": "rm -rf dist",
     "lint": "tsc --noEmit"
   },

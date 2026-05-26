@@ -58,6 +58,23 @@ const BANNED_THERAPY_PHRASE_PATTERNS = [
 export const MIN_MEANINGFUL_WORDS = 2;
 export const MIN_MEANINGFUL_LETTERS = 8;
 
+/** Short phrases that are intentional user speech, not noise — bypass strict filters. */
+const INTENTIONAL_SHORT_PHRASES = [
+  /^(hi|hey|hello)\s+(david|there|man|bro|friend)/i,
+  /^(good\s+)?(morning|evening|afternoon)/i,
+  /^how('?s|\s+is)\s+(it|everything|life|things)/i,
+  /^i('?m|\s+am)\s+/i,
+  /^(i\s+need|i\s+feel|i\s+want|help|pray)/i,
+  /^what('?s|\s+is)\s+/i,
+  /^can\s+you/i,
+  /^david/i,
+];
+
+function isIntentionalShortPhrase(text: string): boolean {
+  const t = text.trim();
+  return INTENTIONAL_SHORT_PHRASES.some(re => re.test(t));
+}
+
 export function normalizeTranscript(text: string): string {
   return text.trim().toLowerCase().replace(/\s+/g, ' ');
 }
@@ -66,6 +83,8 @@ export function isJunkTranscript(text: string): boolean {
   const normalized = normalizeTranscript(text);
   if (!normalized) return true;
   if (normalized.length < 3) return true;
+  // Allow intentional short phrases like "Hi David" through
+  if (isIntentionalShortPhrase(normalized)) return false;
   if (JUNK_TRANSCRIPT_PATTERNS.some(re => re.test(normalized))) return true;
   if (NOISE_TRANSCRIPT_PATTERNS.some(re => re.test(normalized))) return true;
   const words = normalized.split(/\s+/).filter(Boolean);
@@ -77,6 +96,8 @@ export function isJunkTranscript(text: string): boolean {
 export function isMeaningfulTranscript(text: string): boolean {
   if (isJunkTranscript(text)) return false;
   const trimmed = text.trim();
+  // Intentional short phrases always pass — they are real user speech
+  if (isIntentionalShortPhrase(trimmed)) return true;
   const words = trimmed.split(/\s+/).filter(Boolean);
   if (words.length < MIN_MEANINGFUL_WORDS) return false;
   const letters = trimmed.replace(/[^a-zA-Z]/g, '');
