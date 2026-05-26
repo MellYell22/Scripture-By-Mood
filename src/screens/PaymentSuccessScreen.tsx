@@ -1,14 +1,17 @@
 import React, { useEffect, useState } from 'react';
 import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity } from 'react-native';
-import { CheckCircle, ArrowRight, ShieldCheck } from 'lucide-react';
+import { AlertCircle, CheckCircle, ArrowRight, ShieldCheck } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useUser } from '../UserContext';
 import { FullScreenBackground } from '../components/FullScreenBackground';
+import { hasProAccess } from '../utils/tier';
 
 export default function PaymentSuccessScreen({ navigation }: { navigation: any }) {
   const { profile, refreshProfile } = useUser();
   const [isActivating, setIsActivating] = useState(true);
+  const [activationTimedOut, setActivationTimedOut] = useState(false);
   const [attempts, setAttempts] = useState(0);
+  const isActivated = profile ? hasProAccess(profile) : false;
 
   useEffect(() => {
     // Start polling for the pro status
@@ -20,6 +23,7 @@ export default function PaymentSuccessScreen({ navigation }: { navigation: any }
           console.warn('[PaymentSuccess] Polling timed out after 90 seconds.');
           clearInterval(interval);
           setIsActivating(false);
+          setActivationTimedOut(true);
           return next;
         }
         console.log(`[PaymentSuccess] Polling attempt ${next}...`);
@@ -37,9 +41,10 @@ export default function PaymentSuccessScreen({ navigation }: { navigation: any }
 
   useEffect(() => {
     console.log(`[PaymentSuccess] UI Check - Profile: ${profile?.id}, Tier: ${profile?.subscription_tier}, Status: ${profile?.stripe_subscription_status}`);
-    if (profile?.subscription_tier === 'pro' || profile?.subscription_tier === 'owner' || (profile as any)?.subscription_status === 'active') {
+    if (isActivated) {
       console.log('[PaymentSuccess] PRO STATUS DETECTED! Unlocking app features.');
       setIsActivating(false);
+      setActivationTimedOut(false);
       
       // Auto-redirect after a small delay to let user see success
       const timeout = setTimeout(() => {
@@ -47,14 +52,20 @@ export default function PaymentSuccessScreen({ navigation }: { navigation: any }
       }, 3000);
       return () => clearTimeout(timeout);
     }
-  }, [profile?.subscription_tier]);
+  }, [isActivated]);
 
   const handleContinue = () => {
-    // Redirect to main app entry (Mood)
-    navigation.reset({
-      index: 0,
-      routes: [{ name: 'Mood' }],
-    });
+    // Redirect to Profile if activation is not verified so the user does not
+    // see a false Pro success state.
+    const target = activationTimedOut ? 'Profile' : 'Mood';
+    if (navigation?.reset) {
+      navigation.reset({
+        index: 0,
+        routes: [{ name: target }],
+      });
+      return;
+    }
+    navigation?.navigate?.(target);
   };
 
   return (
@@ -79,6 +90,15 @@ export default function PaymentSuccessScreen({ navigation }: { navigation: any }
                   <ActivityIndicator size="large" color="#d4af37" />
                   <Text style={styles.pollingText}>Finalizing your upgrade...</Text>
                 </motion.div>
+              ) : activationTimedOut ? (
+                <motion.div
+                  key="timeout"
+                  initial={{ scale: 0 }}
+                  animate={{ scale: 1 }}
+                  transition={{ type: "spring", stiffness: 200, damping: 20 }}
+                >
+                  <AlertCircle color="#F59E0B" size={64} />
+                </motion.div>
               ) : (
                 <motion.div
                   key="success"
@@ -93,13 +113,19 @@ export default function PaymentSuccessScreen({ navigation }: { navigation: any }
           </View>
 
           <Text style={styles.title}>
-            {isActivating ? 'HEAVENLY SYNC IN PROGRESS' : 'GLORY! YOU ARE PRO'}
+            {isActivating
+              ? 'HEAVENLY SYNC IN PROGRESS'
+              : activationTimedOut
+                ? 'STILL FINALIZING'
+                : 'GLORY! YOU ARE PRO'}
           </Text>
 
           <Text style={styles.description}>
-            {isActivating 
+            {isActivating
               ? 'Our systems are receiving the confirmation from Stripe. Your account will be transformed into Pro momentarily...'
-              : 'Your transformation is complete. You now have unlimited access to AI insights and deeper scripture reflections.'}
+              : activationTimedOut
+                ? 'We received your return from Stripe, but your Pro access has not been confirmed yet. Please check Profile again shortly.'
+                : 'Your transformation is complete. You now have unlimited access to AI insights and deeper scripture reflections.'}
           </Text>
 
           {!isActivating && (
@@ -108,7 +134,7 @@ export default function PaymentSuccessScreen({ navigation }: { navigation: any }
               onPress={handleContinue}
               activeOpacity={0.8}
             >
-              <Text style={styles.buttonText}>START YOUR JOURNEY</Text>
+              <Text style={styles.buttonText}>{activationTimedOut ? 'GO TO PROFILE' : 'START YOUR JOURNEY'}</Text>
               <ArrowRight color="#0b1e3d" size={20} />
             </TouchableOpacity>
           )}

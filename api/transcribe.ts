@@ -15,7 +15,7 @@ const NOISE_TRANSCRIPT_PATTERNS = [
 ];
 
 const MIN_MEANINGFUL_WORDS = 2;
-const MIN_MEANINGFUL_LETTERS = 8;
+const MIN_MEANINGFUL_LETTERS = 5;
 const MIN_AUDIO_BYTES = 5000;
 
 function isJunkTranscript(normalized: string): boolean {
@@ -149,8 +149,6 @@ export default async function handler(req: any, res: any) {
       model: 'whisper-1',
       language: 'en',
       response_format: 'json',
-      // Neutral prompt reduces conversational hallucinations on non-speech audio
-      prompt: 'Spiritual conversation in English.',
       temperature: 0,
     });
 

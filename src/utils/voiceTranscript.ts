@@ -56,7 +56,7 @@ const BANNED_THERAPY_PHRASE_PATTERNS = [
 ];
 
 export const MIN_MEANINGFUL_WORDS = 2;
-export const MIN_MEANINGFUL_LETTERS = 8;
+export const MIN_MEANINGFUL_LETTERS = 5;
 
 export function normalizeTranscript(text: string): string {
   return text.trim().toLowerCase().replace(/\s+/g, ' ');
