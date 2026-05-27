@@ -172,7 +172,7 @@ export function humanizeForTts(
     t = opener + t.charAt(0).toLowerCase() + t.slice(1);
   }
 
-  return t.trim();
+  return processed.trim();
 }
 
 export function sanitizeForDavidSpeech(text: string): string {
