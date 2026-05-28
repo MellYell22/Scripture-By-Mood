@@ -32,7 +32,7 @@ const PORT = 3000;
 
 // OpenAI initialization
 const openai = new OpenAI({
-  apiKey: getOpenAIApiKey() || undefined,
+  apiKey: getOpenAIApiKey() || 'missing-openai-api-key',
 });
 const DAVID_CHAT_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 
