@@ -1,4 +1,10 @@
 import OpenAI from 'openai';
+import {
+  getOpenAIApiKey,
+  getPublicOpenAIErrorMessage,
+  logOpenAIError,
+  OPENAI_API_KEY_ENV_NAME,
+} from '../lib/openaiEnv';
 
 const DAVID_CHAT_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 const DAVID_CHAT_TEMPERATURE = 0.94;
@@ -99,12 +105,13 @@ export default async function handler(req: any, res: any) {
   }
 
   try {
-    if (!process.env.OPENAI_API_KEY) {
+    const openaiApiKey = getOpenAIApiKey();
+    if (!openaiApiKey) {
       throw new Error('OpenAI API Key is not configured.');
     }
 
     const openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY,
+      apiKey: openaiApiKey,
     });
 
     const resolvedMoodKey = resolveMoodKey({
@@ -160,7 +167,11 @@ export default async function handler(req: any, res: any) {
       res.status(200).json({ text });
     }
   } catch (error: any) {
-    console.error('[Chat API] Error:', error.message);
-    res.status(500).json({ error: error.message });
+    logOpenAIError('Chat', error);
+    res.status(500).json({
+      error: 'Failed to get response from AI',
+      details: getPublicOpenAIErrorMessage(error),
+      envName: OPENAI_API_KEY_ENV_NAME,
+    });
   }
 }

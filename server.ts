@@ -6,6 +6,12 @@ import { createServer as createViteServer } from "vite";
 import Stripe from "stripe";
 import { createClient } from "@supabase/supabase-js";
 import OpenAI from "openai";
+import {
+  getOpenAIApiKey,
+  getPublicOpenAIErrorMessage,
+  logOpenAIError,
+  OPENAI_API_KEY_ENV_NAME,
+} from './lib/openaiEnv';
 import { DAVID_PERSONALITY_PROMPT, DAVID_CHAT_TEMPERATURE } from './src/constants/persona';
 import { buildDavidSystemPromptWithMood, resolveMoodKey } from './src/utils/davidMoodContext';
 const ELEVENLABS_TTS_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
@@ -26,7 +32,7 @@ const PORT = 3000;
 
 // OpenAI initialization
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: getOpenAIApiKey() || undefined,
 });
 const DAVID_CHAT_MODEL = process.env.OPENAI_MODEL || 'gpt-4.1-mini';
 
@@ -288,14 +294,16 @@ app.get("/api/health", (req, res) => {
 // OpenAI API Endpoints
 app.post("/api/chat", async (req, res) => {
   const { messages, stream = false, mood, moodKey, detectedMood, profile, voiceContext } = req.body;
+  const openaiApiKey = getOpenAIApiKey();
   
-  if (!process.env.OPENAI_API_KEY) {
+  if (!openaiApiKey) {
     return res.status(500).json({ error: "OpenAI API Key is not configured." });
   }
 
   console.log("OPENAI REQUEST SENT - Chat");
 
   try {
+    const openaiClient = new OpenAI({ apiKey: openaiApiKey });
     const resolvedMoodKey = resolveMoodKey({
       mood,
       moodKey,
@@ -315,7 +323,7 @@ app.post("/api/chat", async (req, res) => {
       res.setHeader('Cache-Control', 'no-cache');
       res.setHeader('Connection', 'keep-alive');
 
-      const completion = await openai.chat.completions.create({
+      const completion = await openaiClient.chat.completions.create({
         model: DAVID_CHAT_MODEL,
         messages: [{ role: "system", content: systemPrompt }, ...messages],
         stream: true,
@@ -335,7 +343,7 @@ app.post("/api/chat", async (req, res) => {
       res.write('data: [DONE]\n\n');
       res.end();
     } else {
-      const completion = await openai.chat.completions.create({
+      const completion = await openaiClient.chat.completions.create({
         model: DAVID_CHAT_MODEL,
         messages: [{ role: "system", content: systemPrompt }, ...messages],
         temperature: DAVID_CHAT_TEMPERATURE,
@@ -348,8 +356,12 @@ app.post("/api/chat", async (req, res) => {
       res.json({ text });
     }
   } catch (error: any) {
-    console.error("[OpenAI] Chat error:", error);
-    res.status(500).json({ error: error.message });
+    logOpenAIError('Chat', error);
+    res.status(500).json({
+      error: 'Failed to get response from AI',
+      details: getPublicOpenAIErrorMessage(error),
+      envName: OPENAI_API_KEY_ENV_NAME,
+    });
   }
 });
 
@@ -457,7 +469,8 @@ Briefly explain how it applies to a person's life today. The reflection must be 
 // Transcribe audio using OpenAI Whisper
 app.post("/api/transcribe", express.raw({ type: '*/*', limit: '25mb' }), async (req: any, res) => {
   try {
-    if (!process.env.OPENAI_API_KEY) {
+    const openaiApiKey = getOpenAIApiKey();
+    if (!openaiApiKey) {
       return res.status(500).json({ error: 'OpenAI API key not configured' });
     }
 
@@ -516,7 +529,7 @@ app.post("/api/transcribe", express.raw({ type: '*/*', limit: '25mb' }), async (
     const ext = extMap[mimeType] || 'webm';
 
     const { OpenAI } = await import('openai');
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const openai = new OpenAI({ apiKey: openaiApiKey });
     const safeFilename = filename.includes('.') ? filename : `audio.${ext}`;
     const audioFile = new File([audioBuffer], safeFilename, { type: mimeType });
 
@@ -569,8 +582,12 @@ app.post("/api/transcribe", express.raw({ type: '*/*', limit: '25mb' }), async (
       reason: accepted ? undefined : 'not_meaningful',
     });
   } catch (error: any) {
-    console.error('[Transcribe] Error:', error.message);
-    res.status(500).json({ error: 'Transcription failed', message: error.message });
+    logOpenAIError('Transcription', error);
+    res.status(500).json({
+      error: 'Transcription failed',
+      message: getPublicOpenAIErrorMessage(error),
+      envName: OPENAI_API_KEY_ENV_NAME,
+    });
   }
 });
 

@@ -1,4 +1,10 @@
 import OpenAI from 'openai';
+import {
+  getOpenAIApiKey,
+  getPublicOpenAIErrorMessage,
+  logOpenAIError,
+  OPENAI_API_KEY_ENV_NAME,
+} from '../lib/openaiEnv';
 
 const JUNK_TRANSCRIPT_PATTERNS = [
   /^[\s.…,!?*-]+$/,
@@ -65,7 +71,8 @@ export default async function handler(req: any, res: any) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   try {
-    if (!process.env.OPENAI_API_KEY) {
+    const openaiApiKey = getOpenAIApiKey();
+    if (!openaiApiKey) {
       return res.status(500).json({ error: 'OpenAI API key not configured' });
     }
 
@@ -139,7 +146,7 @@ export default async function handler(req: any, res: any) {
     const audioFilename = filename.includes('.') ? filename : `audio.${ext}`;
 
     // Call OpenAI Whisper
-    const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+    const openai = new OpenAI({ apiKey: openaiApiKey });
 
     // Create a File-like object from the buffer
     const audioFile = new File([audioBuffer], audioFilename, { type: mimeType });
@@ -161,10 +168,11 @@ export default async function handler(req: any, res: any) {
     return res.status(200).json(sanitized);
 
   } catch (error: any) {
-    console.error('[Transcribe] Error:', error.message);
+    logOpenAIError('Transcription', error);
     return res.status(500).json({
       error: 'Transcription failed',
-      message: error.message,
+      message: getPublicOpenAIErrorMessage(error),
+      envName: OPENAI_API_KEY_ENV_NAME,
     });
   }
 }
