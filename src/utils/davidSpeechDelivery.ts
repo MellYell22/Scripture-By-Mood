@@ -3,6 +3,13 @@ export type PrepareTtsResult = {
   speechText: string;
 };
 
+export type HumanizeOptions = {
+  isGreeting?: boolean;
+  skipOpener?: boolean;
+  skipHumanize?: boolean;
+  alreadyPrepared?: boolean;
+};
+
 const TRAILING_PAUSE_MARKS = /[\s,;:-]+$/;
 
 const SOFT_FILLER_RE =
@@ -172,7 +179,7 @@ export function humanizeForTts(
     t = opener + t.charAt(0).toLowerCase() + t.slice(1);
   }
 
-  return processed.trim();
+  return t.trim();
 }
 
 export function sanitizeForDavidSpeech(text: string): string {
