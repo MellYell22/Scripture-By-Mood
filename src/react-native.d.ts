@@ -13,6 +13,7 @@ declare module 'react-native' {
   export class TouchableOpacity extends React.Component<any> {}
   export class ScrollView extends React.Component<any> {
     scrollTo(...args: any[]): void;
+    scrollToEnd(...args: any[]): void;
     getInnerViewNode(): any;
   }
   export class TextInput extends React.Component<any> {}
