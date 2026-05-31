@@ -44,7 +44,20 @@ export function getPublicOpenAIErrorMessage(error: any): string {
     return `${OPENAI_API_KEY_ENV_NAME} is missing or invalid on the server.`;
   }
 
+  if (error?.status === 429 || error?.code === 'insufficient_quota') {
+    return 'OpenAI quota or billing is not available for this server key.';
+  }
+
   return 'OpenAI request failed.';
+}
+
+export function getPublicOpenAIHttpStatus(error: any): number {
+  const status = Number(error?.status || error?.response?.status);
+  if ([400, 401, 403, 408, 409, 422, 429].includes(status)) {
+    return status;
+  }
+
+  return 500;
 }
 
 function redactOpenAIKey(message: string): string {

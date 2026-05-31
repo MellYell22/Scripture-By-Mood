@@ -9,6 +9,7 @@ import OpenAI from "openai";
 import {
   getOpenAIApiKey,
   getPublicOpenAIErrorMessage,
+  getPublicOpenAIHttpStatus,
   logOpenAIError,
   OPENAI_API_KEY_ENV_NAME,
 } from './lib/openaiEnv';
@@ -357,7 +358,7 @@ app.post("/api/chat", async (req, res) => {
     }
   } catch (error: any) {
     logOpenAIError('Chat', error);
-    res.status(500).json({
+    res.status(getPublicOpenAIHttpStatus(error)).json({
       error: 'Failed to get response from AI',
       details: getPublicOpenAIErrorMessage(error),
       envName: OPENAI_API_KEY_ENV_NAME,

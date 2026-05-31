@@ -2,6 +2,7 @@ import OpenAI from 'openai';
 import {
   getOpenAIApiKey,
   getPublicOpenAIErrorMessage,
+  getPublicOpenAIHttpStatus,
   logOpenAIError,
   OPENAI_API_KEY_ENV_NAME,
 } from '../lib/openaiEnv';
@@ -168,7 +169,7 @@ export default async function handler(req: any, res: any) {
     }
   } catch (error: any) {
     logOpenAIError('Chat', error);
-    res.status(500).json({
+    res.status(getPublicOpenAIHttpStatus(error)).json({
       error: 'Failed to get response from AI',
       details: getPublicOpenAIErrorMessage(error),
       envName: OPENAI_API_KEY_ENV_NAME,
