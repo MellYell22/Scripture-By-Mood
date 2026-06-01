@@ -1,8 +1,8 @@
-const ELEVENLABS_VOICE_ID = 'your-voice-id-here';
+const DAVID_ELEVENLABS_VOICE_ID = 'ewxUvnyvvOehYjKjUVKC';
 const ELEVENLABS_TTS_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
-const ELEVENLABS_MODEL = 'eleven_flash_v2_5';
+const ELEVENLABS_MODEL = process.env.ELEVENLABS_MODEL || 'eleven_v3';
 
-import { humanizeForTts } from './davidSpeechDelivery';
+import { humanizeForTts } from '../src/utils/davidSpeechDelivery';
 
 function cleanTranscript(text: string): string {
   return text
@@ -34,7 +34,7 @@ export default async function handler(req: any, res: any) {
     return res.status(500).json({ error: 'ELEVENLABS_API_KEY not set' });
   }
 
-  const voiceId = process.env.ELEVENLABS_VOICE_ID || ELEVENLABS_VOICE_ID;
+  const voiceId = process.env.ELEVENLABS_VOICE_ID || DAVID_ELEVENLABS_VOICE_ID;
 
   try {
     const response = await fetch(`${ELEVENLABS_TTS_URL}/${voiceId}`, {

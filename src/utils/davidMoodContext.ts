@@ -1,9 +1,17 @@
-import { buildDavidScriptureResponse, MOODS_DATA } from '../constants/moods';
+import { MOODS_DATA, Scripture } from '../constants/moods';
 import { DAVID_PERSONALITY_PROMPT } from '../constants/persona';
 
 type ChatLikeMessage = {
   role?: string;
   content?: string;
+};
+
+export type DavidScriptureGuidance = {
+  moodKey: string | null;
+  scripture: Scripture | null;
+  reaction: string | null;
+  followUp: string | null;
+  resetUsedVerses: boolean;
 };
 
 const MOOD_KEYWORDS: Record<string, string[]> = {
@@ -72,23 +80,99 @@ export function resolveMoodKey(input: {
   );
 }
 
-export function buildDavidSystemPromptWithMood(moodKey?: string | null): string {
-  const normalizedMoodKey = normalizeMoodKey(moodKey);
-  if (!normalizedMoodKey) return DAVID_PERSONALITY_PROMPT;
+const normalizeUsedVerseRefs = (usedVerseRefs: string[] = []): Set<string> =>
+  new Set(
+    usedVerseRefs
+      .filter((reference): reference is string => typeof reference === 'string')
+      .map((reference) => reference.trim().toLowerCase())
+      .filter(Boolean),
+  );
 
-  const scriptureContext = buildDavidScriptureResponse(normalizedMoodKey);
-  const scriptureSection = scriptureContext
-    ? `\n\n${scriptureContext}`
-    : '';
+const pickRandom = <T,>(items: T[]): T | null => {
+  if (!items.length) return null;
+  return items[Math.floor(Math.random() * items.length)];
+};
+
+export function buildDavidScriptureGuidance(
+  moodKey?: string | null,
+  usedVerseRefs: string[] = [],
+): DavidScriptureGuidance {
+  const normalizedMoodKey = normalizeMoodKey(moodKey);
+  if (!normalizedMoodKey) {
+    return {
+      moodKey: null,
+      scripture: null,
+      reaction: null,
+      followUp: null,
+      resetUsedVerses: false,
+    };
+  }
+
+  const mood = MOODS_DATA.find((item) => item.key === normalizedMoodKey);
+  if (!mood?.scriptures.length) {
+    return {
+      moodKey: normalizedMoodKey,
+      scripture: null,
+      reaction: null,
+      followUp: null,
+      resetUsedVerses: false,
+    };
+  }
+
+  const used = normalizeUsedVerseRefs(usedVerseRefs);
+  const freshScriptures = mood.scriptures.filter(
+    (scripture) => !used.has(scripture.reference.trim().toLowerCase()),
+  );
+  const resetUsedVerses = freshScriptures.length === 0;
+  const scripture = pickRandom(resetUsedVerses ? mood.scriptures : freshScriptures);
+
+  return {
+    moodKey: normalizedMoodKey,
+    scripture,
+    reaction: pickRandom(mood.davidReaction),
+    followUp: pickRandom(mood.davidFollowUps),
+    resetUsedVerses,
+  };
+}
+
+export function buildDavidSystemPromptWithMood(
+  moodKey?: string | null,
+  usedVerseRefs: string[] = [],
+): string {
+  const guidance = buildDavidScriptureGuidance(moodKey, usedVerseRefs);
+  return buildDavidSystemPromptFromGuidance(guidance);
+}
+
+export function buildDavidSystemPromptFromGuidance(guidance: DavidScriptureGuidance): string {
+  if (!guidance.moodKey || !guidance.scripture) return DAVID_PERSONALITY_PROMPT;
+
+  const scriptureSection = `
+
+USE THIS SCRIPTURE FOR THIS TURN:
+Mood: ${guidance.moodKey}
+Warm acknowledgement option: ${guidance.reaction || 'Acknowledge the user briefly and naturally.'}
+Reference: ${guidance.scripture.reference}
+Full scripture: ${guidance.scripture.verse}
+Short reflection idea: ${guidance.scripture.davidReflection}
+Gentle follow-up option: ${guidance.followUp || 'Ask one small, gentle follow-up question.'}
+
+Required response flow:
+1. Acknowledge the user's mood briefly.
+2. Lead naturally into the scripture.
+3. Read the full scripture exactly once.
+4. Give one short reflection.
+5. Ask one gentle follow-up question.
+
+Keep it conversational and warm. Do not make a list. Do not sound robotic. End the response with this exact private tracking footer on its own line: [VERSE USED: ${guidance.scripture.reference}]`;
 
   return `${DAVID_PERSONALITY_PROMPT}
 CURRENT EMOTIONAL THREAD:
-The user may be feeling ${normalizedMoodKey.toLowerCase()}.
+The user may be feeling ${guidance.moodKey.toLowerCase()}.
 
 Respond as if you noticed this from their voice and words, not as if you are labeling them. Do not say, "It sounds like you're feeling..." or clinically name the emotion unless the user named it first.
 
-Use this scripture material only as quiet inspiration. If you mention scripture, connect it to the user's emotional moment in one natural sentence. Do not list verses, preach, or over-explain.
+Use the scripture material below for this turn. Connect it to the user's emotional moment without preaching or over-explaining.
 ${scriptureSection}
 
-Best voice pattern for this moment: brief acknowledgement, one gentle spiritual thought, then stop or ask one small question.`;
+Best voice pattern for this moment: human acknowledgement, scripture, short reflection, one gentle question.`;
 }

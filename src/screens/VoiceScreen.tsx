@@ -11,10 +11,11 @@ import {
 } from 'react-native';
 import { Lock, Mic, Send, Sparkles, Volume2 } from 'lucide-react';
 
-import { getChatResponse, generateSpeech } from '../services/ai';
+import { generateSpeech, getDavidVoiceResponse } from '../services/ai';
 import { useUser } from '../UserContext';
 import { hasProAccess, OWNER_EMAIL } from '../utils/tier';
 import { humanizeForTts, prepareDavidTtsPayload } from '../utils/davidSpeechDelivery';
+import { detectMoodKeyFromMessages } from '../utils/davidMoodContext';
 
 const DAVID_GREETING_AUDIO_URL = '/audio/david-greeting.mp3';
 
@@ -34,6 +35,56 @@ type ChatTurn = {
 
 const cleanVerseMarker = (text: string): string =>
   text.replace(/\n?\[VERSE USED:\s*[^\]]+\]\s*$/i, '').trim();
+
+const extractVerseMarker = (text: string): string | null => {
+  const match = text.match(/\[VERSE USED:\s*([^\]]+)\]/i);
+  return match?.[1]?.trim() || null;
+};
+
+const getUsedVersesStorageKey = (userId?: string | null): string =>
+  `david_used_verses_${userId || 'guest'}`;
+
+const readUsedVersesByMood = (userId?: string | null): Record<string, string[]> => {
+  if (typeof localStorage === 'undefined') return {};
+
+  try {
+    const raw = localStorage.getItem(getUsedVersesStorageKey(userId));
+    if (!raw) return {};
+    const parsed = JSON.parse(raw);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+};
+
+const writeUsedVersesByMood = (
+  userId: string | null | undefined,
+  nextUsedVerses: Record<string, string[]>,
+) => {
+  if (typeof localStorage === 'undefined') return;
+  localStorage.setItem(getUsedVersesStorageKey(userId), JSON.stringify(nextUsedVerses));
+};
+
+const updateUsedVerseForMood = (input: {
+  userId?: string | null;
+  moodKey?: string | null;
+  verseReference?: string | null;
+  resetUsedVerses?: boolean;
+}) => {
+  if (!input.moodKey || !input.verseReference) return;
+
+  const moodKey = input.moodKey.toUpperCase();
+  const current = readUsedVersesByMood(input.userId);
+  const existing = Array.isArray(current[moodKey]) ? current[moodKey] : [];
+  const nextMoodPool = input.resetUsedVerses
+    ? [input.verseReference]
+    : Array.from(new Set([...existing, input.verseReference]));
+
+  writeUsedVersesByMood(input.userId, {
+    ...current,
+    [moodKey]: nextMoodPool,
+  });
+};
 
 export default function VoiceScreen() {
   const { profile, session, loading: userContextLoading } = useUser();
@@ -136,10 +187,13 @@ export default function VoiceScreen() {
     try {
       const preparedText = prepareDavidTtsPayload(humanizeForTts(text), {
         isGreeting: false,
-      });
+      }).speechText;
       const audioUrl = await generateSpeech(preparedText, { alreadyPrepared: true });
 
       if (!audioUrl || Platform.OS !== 'web') {
+        if (mountedRef.current) {
+          setError("David's text response is ready, but the audio could not be generated right now.");
+        }
         setPhase('ready');
         return;
       }
@@ -191,8 +245,24 @@ export default function VoiceScreen() {
     setMessages(nextMessages);
 
     try {
-      const response = await getChatResponse(nextMessages, 'medium');
-      const cleanedResponse = cleanVerseMarker(response);
+      const detectedMoodKey = detectMoodKeyFromMessages(nextMessages) || undefined;
+      const userId = session?.user?.id || profile?.id || 'guest';
+      const usedVersesByMood = readUsedVersesByMood(userId);
+      const usedVerses = detectedMoodKey ? usedVersesByMood[detectedMoodKey] || [] : [];
+      const response = await getDavidVoiceResponse(nextMessages, {
+        responseLength: 'medium',
+        moodKey: detectedMoodKey,
+        usedVerses,
+      });
+      const verseReference = response.verseUsed || extractVerseMarker(response.text);
+      const cleanedResponse = cleanVerseMarker(response.text);
+
+      updateUsedVerseForMood({
+        userId,
+        moodKey: response.moodKey || detectedMoodKey,
+        verseReference,
+        resetUsedVerses: response.resetUsedVerses,
+      });
 
       const finalMessages: ChatTurn[] = [
         ...nextMessages,
@@ -255,16 +325,16 @@ export default function VoiceScreen() {
       <View style={styles.statusContainer}>
         <Text style={styles.statusText}>
           {phase === 'checking'
-            ? 'Getting David ready…'
+            ? 'Getting David ready...'
             : phase === 'greeting'
-              ? 'David is greeting you…'
+              ? 'David is greeting you...'
               : phase === 'tapToBegin'
                 ? 'Tap to begin so David can greet you.'
                 : phase === 'thinking'
-                  ? 'David is reflecting…'
+                  ? 'David is reflecting...'
                   : phase === 'speaking'
-                    ? 'David is speaking…'
-                    : 'Tell David how you’re feeling.'}
+                    ? 'David is speaking...'
+                    : "Tell David how you're feeling."}
         </Text>
       </View>
 
@@ -289,7 +359,7 @@ export default function VoiceScreen() {
               style={styles.textInputField}
               value={textInput}
               onChangeText={setTextInput}
-              placeholder="Tell David how you’re feeling…"
+              placeholder="Tell David how you're feeling..."
               placeholderTextColor="rgba(212, 175, 55, 0.45)"
               onSubmitEditing={handleTextSubmit}
               returnKeyType="send"
@@ -326,7 +396,7 @@ export default function VoiceScreen() {
 const styles = StyleSheet.create({
   outerContainer: {
     flex: 1,
-    backgroundColor: 'transparent',
+    backgroundColor: '#07162b',
   },
   container: {
     minHeight: '100%',

@@ -91,6 +91,13 @@ export interface ChatHistoryMessage {
   content: string;
 }
 
+export type DavidVoiceResponse = {
+  text: string;
+  moodKey?: string | null;
+  verseUsed?: string | null;
+  resetUsedVerses?: boolean;
+};
+
 const buildVoiceConversationContext = (history: ChatHistoryMessage[]): string => {
   const recent = history.slice(-6);
   const lastUser = [...recent].reverse().find(message => message.role === 'user')?.content || '';
@@ -114,15 +121,46 @@ const buildVoiceConversationContext = (history: ChatHistoryMessage[]): string =>
   ].filter(Boolean).join('\n');
 };
 
+const getFriendlyApiErrorMessage = async (response: Response, fallback: string): Promise<string> => {
+  const error = await response.json().catch(() => ({}));
+  const rawMessage = error.message || error.details || error.error || '';
+
+  if (response.status === 429) {
+    return "David needs a moment before answering again. Give it a little time, then try once more.";
+  }
+
+  if (response.status >= 500) {
+    return "David is having trouble connecting right now. Your keys stay private on the server, but the backend could not finish this request.";
+  }
+
+  return rawMessage || fallback;
+};
+
 export const getChatResponse = async (
   history: ChatHistoryMessage[],
   responseLength: ResponseLength = 'short',
   moodKey?: string,
 ): Promise<string> => {
+  const data = await getDavidVoiceResponse(history, {
+    responseLength,
+    moodKey,
+  });
+  return data.text;
+};
+
+export const getDavidVoiceResponse = async (
+  history: ChatHistoryMessage[],
+  options: {
+    responseLength?: ResponseLength;
+    moodKey?: string;
+    usedVerses?: string[];
+  } = {},
+): Promise<DavidVoiceResponse> => {
+  const responseLength = options.responseLength || 'short';
   const lengthInstruction = {
-    short: "Voice turn: 6-28 words when possible. One natural spoken beat, maybe two. No lists, no greeting, no customer-support language.",
-    medium: "Voice turn: 1-2 short sentences. Human rhythm, modest pauses, no polished paragraph, no validation formula.",
-    long: "Voice turn: 2-3 short sentences max. Give the simple answer first, then stop. No sermon, no bullet list."
+    short: "Voice turn: use the required David scripture flow, but keep every sentence warm and simple.",
+    medium: "Voice turn: acknowledge, read the full scripture, give one short reflection, and ask one gentle question.",
+    long: "Voice turn: full David scripture flow, conversational and pastoral, no list formatting."
   }[responseLength];
 
   const voiceContext = buildVoiceConversationContext(history);
@@ -142,17 +180,26 @@ export const getChatResponse = async (
   const response = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messages, moodKey, voiceContext })
+    body: JSON.stringify({
+      messages,
+      moodKey: options.moodKey,
+      voiceContext,
+      usedVerses: options.usedVerses || [],
+    })
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({}));
-    throw new Error(error.message || error.error || `Failed to get chat response (${response.status})`);
+    throw new Error(await getFriendlyApiErrorMessage(response, `Failed to get chat response (${response.status})`));
   }
 
   console.log("OPENAI RESPONSE RECEIVED - Chat");
   const data = await response.json();
-  return data.text;
+  return {
+    text: data.text || '',
+    moodKey: data.moodKey || options.moodKey || null,
+    verseUsed: data.verseUsed || null,
+    resetUsedVerses: Boolean(data.resetUsedVerses),
+  };
 };
 
 export const getChatResponseStream = async (
