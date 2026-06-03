@@ -7,6 +7,7 @@ import {
   DavidConversationMemory,
   getDavidConversationMemory,
   saveDavidConversationMemory,
+  supabase,
 } from "./supabase";
 
 export type GenerateSpeechOptions = {
@@ -115,6 +116,23 @@ const getOpeningPhrase = (text: string): string => {
 const getFollowUpQuestion = (text: string): string => {
   const questions = text.match(/[^.!?]*\?/g) || [];
   return safeText(questions[questions.length - 1] || '', 220);
+};
+
+const resolveDavidMemoryUserId = async (explicitUserId?: string | null): Promise<string | null> => {
+  if (explicitUserId && explicitUserId !== 'guest') return explicitUserId;
+  if (!supabase) return null;
+
+  try {
+    const { data, error } = await supabase.auth.getUser();
+    if (error) {
+      console.log('[David Memory] Could not resolve authenticated user:', error.message);
+      return null;
+    }
+    return data?.user?.id || null;
+  } catch (error) {
+    console.log('[David Memory] Auth lookup failed:', error);
+    return null;
+  }
 };
 
 const buildMemorySummary = (memory: DavidConversationMemory[]): string => {
@@ -238,7 +256,8 @@ export const getDavidVoiceResponse = async (
     long: "Voice turn: full David scripture flow, conversational and pastoral, no list formatting. Avoid recycled openings and repeated question endings."
   }[responseLength];
 
-  const memory = options.userId ? await getDavidConversationMemory(options.userId, 10) : [];
+  const memoryUserId = await resolveDavidMemoryUserId(options.userId);
+  const memory = memoryUserId ? await getDavidConversationMemory(memoryUserId, 10) : [];
   const memoryUsedVerses = memory
     .map(item => item.verse_used)
     .filter((verse): verse is string => Boolean(verse));
@@ -279,9 +298,9 @@ export const getDavidVoiceResponse = async (
   const verseUsed = data.verseUsed || null;
   const latestUserMessage = [...history].reverse().find(message => message.role === 'user')?.content || '';
 
-  if (options.userId && latestUserMessage && text) {
+  if (memoryUserId && latestUserMessage && text) {
     await saveDavidConversationMemory({
-      user_id: options.userId,
+      user_id: memoryUserId,
       mood_key: moodKey,
       user_message: latestUserMessage,
       david_response: text,
