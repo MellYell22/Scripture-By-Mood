@@ -3,6 +3,11 @@ import {
   prepareDavidTtsPayload,
   sanitizeForDavidSpeech,
 } from "../utils/davidSpeechDelivery";
+import {
+  DavidConversationMemory,
+  getDavidConversationMemory,
+  saveDavidConversationMemory,
+} from "./supabase";
 
 export type GenerateSpeechOptions = {
   isGreeting?: boolean;
@@ -98,7 +103,74 @@ export type DavidVoiceResponse = {
   resetUsedVerses?: boolean;
 };
 
-const buildVoiceConversationContext = (history: ChatHistoryMessage[]): string => {
+const safeText = (text: string, maxLength = 280): string =>
+  text.replace(/\s+/g, ' ').trim().slice(0, maxLength);
+
+const getOpeningPhrase = (text: string): string => {
+  const cleaned = safeText(text, 220);
+  const firstSentence = cleaned.match(/^(.+?[.!?])\s/)?.[1];
+  return safeText(firstSentence || cleaned.split(',')[0] || cleaned, 160);
+};
+
+const getFollowUpQuestion = (text: string): string => {
+  const questions = text.match(/[^.!?]*\?/g) || [];
+  return safeText(questions[questions.length - 1] || '', 220);
+};
+
+const buildMemorySummary = (memory: DavidConversationMemory[]): string => {
+  if (!memory.length) return '';
+
+  const moodCounts = memory.reduce<Record<string, number>>((counts, item) => {
+    const mood = (item.mood_key || 'unknown').toUpperCase();
+    counts[mood] = (counts[mood] || 0) + 1;
+    return counts;
+  }, {});
+
+  const recurringMoods = Object.entries(moodCounts)
+    .filter(([, count]) => count >= 2)
+    .map(([mood, count]) => `${mood} repeated ${count} times`)
+    .join('; ');
+
+  const verses = memory
+    .map(item => item.verse_used)
+    .filter(Boolean)
+    .slice(0, 10)
+    .join(', ');
+
+  const openings = memory
+    .map(item => item.opening_phrase)
+    .filter(Boolean)
+    .slice(0, 10)
+    .join(' | ');
+
+  const questions = memory
+    .map(item => item.follow_up_question)
+    .filter(Boolean)
+    .slice(0, 10)
+    .join(' | ');
+
+  const themes = memory
+    .map(item => item.short_summary || item.user_message)
+    .filter(Boolean)
+    .slice(0, 6)
+    .map(item => `- ${safeText(String(item), 220)}`)
+    .join('\n');
+
+  return [
+    'PRIVATE DAVID MEMORY SUMMARY:',
+    recurringMoods ? `Recurring emotions: ${recurringMoods}. If relevant, acknowledge the pattern gently and naturally.` : '',
+    verses ? `Recently used verses: ${verses}. Avoid repeating these unless the selected mood pool is exhausted.` : '',
+    openings ? `Recent David openings: ${openings}. Use a different opening this time.` : '',
+    questions ? `Recent David questions: ${questions}. Use a different ending or no question if that feels more human.` : '',
+    themes ? `Recent emotional themes:\n${themes}` : '',
+    'Freshness standard: make this response feel specific to the user message, not like a reused devotional template.',
+  ].filter(Boolean).join('\n');
+};
+
+const buildVoiceConversationContext = (
+  history: ChatHistoryMessage[],
+  memory: DavidConversationMemory[] = [],
+): string => {
   const recent = history.slice(-6);
   const lastUser = [...recent].reverse().find(message => message.role === 'user')?.content || '';
   const previousAssistant = [...recent].reverse().find(message => message.role === 'assistant')?.content || '';
@@ -116,8 +188,10 @@ const buildVoiceConversationContext = (history: ChatHistoryMessage[]): string =>
   return [
     lastUser ? `Latest user words: ${lastUser}` : '',
     emotionalThread ? `Emotional thread to remember quietly: ${emotionalThread}` : '',
-    previousAssistant ? `Do not repeat David's last wording: ${previousAssistant}` : '',
-    'Continue the live voice conversation. Follow the user\'s current direction, avoid restarting, and keep the next spoken turn short.'
+    previousAssistant ? `Do not echo David's last wording: ${previousAssistant}` : '',
+    buildMemorySummary(memory),
+    'Continue the live voice conversation. Follow the user\'s current direction, avoid restarting, and keep the next spoken turn short.',
+    'Use varied wording, varied scripture lead-ins, and varied endings.'
   ].filter(Boolean).join('\n');
 };
 
@@ -154,16 +228,22 @@ export const getDavidVoiceResponse = async (
     responseLength?: ResponseLength;
     moodKey?: string;
     usedVerses?: string[];
+    userId?: string | null;
   } = {},
 ): Promise<DavidVoiceResponse> => {
   const responseLength = options.responseLength || 'short';
   const lengthInstruction = {
-    short: "Voice turn: use the required David scripture flow, but keep every sentence warm and simple.",
-    medium: "Voice turn: acknowledge, read the full scripture, give one short reflection, and ask one gentle question.",
-    long: "Voice turn: full David scripture flow, conversational and pastoral, no list formatting."
+    short: "Voice turn: use the required David scripture flow, but keep every sentence warm and simple. Vary the wording.",
+    medium: "Voice turn: sound human and unscripted. Acknowledge, use scripture naturally, give one short reflection, and only ask a gentle question if it truly fits.",
+    long: "Voice turn: full David scripture flow, conversational and pastoral, no list formatting. Avoid recycled openings and repeated question endings."
   }[responseLength];
 
-  const voiceContext = buildVoiceConversationContext(history);
+  const memory = options.userId ? await getDavidConversationMemory(options.userId, 10) : [];
+  const memoryUsedVerses = memory
+    .map(item => item.verse_used)
+    .filter((verse): verse is string => Boolean(verse));
+  const combinedUsedVerses = Array.from(new Set([...(options.usedVerses || []), ...memoryUsedVerses]));
+  const voiceContext = buildVoiceConversationContext(history, memory);
 
   // Map history to OpenAI format (Gemini uses 'model', OpenAI uses 'assistant')
   const messages = history.map(h => ({
@@ -184,7 +264,7 @@ export const getDavidVoiceResponse = async (
       messages,
       moodKey: options.moodKey,
       voiceContext,
-      usedVerses: options.usedVerses || [],
+      usedVerses: combinedUsedVerses,
     })
   });
 
@@ -194,10 +274,28 @@ export const getDavidVoiceResponse = async (
 
   console.log("OPENAI RESPONSE RECEIVED - Chat");
   const data = await response.json();
+  const text = data.text || '';
+  const moodKey = data.moodKey || options.moodKey || null;
+  const verseUsed = data.verseUsed || null;
+  const latestUserMessage = [...history].reverse().find(message => message.role === 'user')?.content || '';
+
+  if (options.userId && latestUserMessage && text) {
+    await saveDavidConversationMemory({
+      user_id: options.userId,
+      mood_key: moodKey,
+      user_message: latestUserMessage,
+      david_response: text,
+      verse_used: verseUsed,
+      opening_phrase: getOpeningPhrase(text),
+      follow_up_question: getFollowUpQuestion(text),
+      short_summary: `${moodKey || 'unknown mood'}: ${safeText(latestUserMessage, 180)} / verse: ${verseUsed || 'none'}`,
+    });
+  }
+
   return {
-    text: data.text || '',
-    moodKey: data.moodKey || options.moodKey || null,
-    verseUsed: data.verseUsed || null,
+    text,
+    moodKey,
+    verseUsed,
     resetUsedVerses: Boolean(data.resetUsedVerses),
   };
 };
@@ -310,4 +408,3 @@ export const generateSpeech = async (
 
   return URL.createObjectURL(blob);
 };
-
