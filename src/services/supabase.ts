@@ -24,6 +24,80 @@ export const supabase: SupabaseClient | null = (isValidUrl(supabaseUrl) && supab
 
 export const isSupabaseConfigured = !!supabase;
 
+export type DavidConversationMemory = {
+  id?: string;
+  user_id: string;
+  mood_key?: string | null;
+  user_message: string;
+  david_response: string;
+  verse_used?: string | null;
+  opening_phrase?: string | null;
+  follow_up_question?: string | null;
+  short_summary?: string | null;
+  created_at?: string;
+};
+
+const cleanMemoryText = (text: string, maxLength = 500): string =>
+  text.replace(/\s+/g, ' ').trim().slice(0, maxLength);
+
+export const getDavidConversationMemory = async (
+  userId: string,
+  limit = 10,
+): Promise<DavidConversationMemory[]> => {
+  if (!supabase || !userId || userId === 'guest') {
+    console.log('[David Memory] Supabase unavailable or guest user; read skipped.');
+    return [];
+  }
+
+  const { data, error } = await supabase
+    .from('david_conversation_memory')
+    .select('*')
+    .eq('user_id', userId)
+    .order('created_at', { ascending: false })
+    .limit(limit);
+
+  if (error) {
+    console.error('[David Memory] Read failed:', error);
+    return [];
+  }
+
+  console.log(`[David Memory] Read ${data?.length || 0} records.`);
+  return (data || []) as DavidConversationMemory[];
+};
+
+export const saveDavidConversationMemory = async (
+  entry: DavidConversationMemory,
+): Promise<boolean> => {
+  if (!supabase || !entry.user_id || entry.user_id === 'guest') {
+    console.log('[David Memory] Supabase unavailable or guest user; write skipped.');
+    return false;
+  }
+
+  const payload = {
+    user_id: entry.user_id,
+    mood_key: entry.mood_key || null,
+    user_message: cleanMemoryText(entry.user_message, 1000),
+    david_response: cleanMemoryText(entry.david_response, 2000),
+    verse_used: entry.verse_used || null,
+    opening_phrase: entry.opening_phrase ? cleanMemoryText(entry.opening_phrase, 220) : null,
+    follow_up_question: entry.follow_up_question ? cleanMemoryText(entry.follow_up_question, 260) : null,
+    short_summary: entry.short_summary ? cleanMemoryText(entry.short_summary, 700) : null,
+    created_at: entry.created_at || new Date().toISOString(),
+  };
+
+  const { error } = await supabase
+    .from('david_conversation_memory')
+    .insert(payload);
+
+  if (error) {
+    console.error('[David Memory] Write failed:', error);
+    return false;
+  }
+
+  console.log('[David Memory] Write succeeded.');
+  return true;
+};
+
 export const saveScripture = async (userId: string, scripture: { verse: string, reference: string, explanation?: string }, version: string, category?: string) => {
   if (!supabase) throw new Error("Supabase is not configured.");
   
