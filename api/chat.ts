@@ -10,8 +10,8 @@ import {
   buildDavidScriptureGuidance,
   buildDavidSystemPromptFromGuidance,
   resolveMoodKey,
-  DavidScriptureGuidance,
 } from '../src/utils/davidMoodContext';
+import type { DavidScriptureGuidance } from '../src/utils/davidMoodContext';
 
 const DAVID_CHAT_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 const DAVID_CHAT_TEMPERATURE = 0.88;
