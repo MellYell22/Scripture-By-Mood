@@ -39,6 +39,26 @@ export default async function handler(req: any, res: any) {
 
   try {
     const speechUrl = `${ELEVENLABS_TTS_URL}/${voiceId}?output_format=${encodeURIComponent(ELEVENLABS_OUTPUT_FORMAT)}`;
+
+    const requestPayload = {
+      text: cleanText,
+      model_id: ELEVENLABS_MODEL,
+      voice_settings: {
+        stability: 0.72,
+        similarity_boost: 0.88,
+        speed: 0.92,
+        style: 0.4,
+      },
+    };
+
+    console.log('[Speech] ElevenLabs request', {
+      url: speechUrl,
+      voiceId,
+      model: ELEVENLABS_MODEL,
+      outputFormat: ELEVENLABS_OUTPUT_FORMAT,
+      textPreview: cleanText.substring(0, 200),
+    });
+
     const response = await fetch(speechUrl, {
       method: 'POST',
       headers: {
@@ -46,22 +66,27 @@ export default async function handler(req: any, res: any) {
         'Content-Type': 'application/json',
         'Accept': 'audio/mpeg',
       },
-      body: JSON.stringify({
-        text: cleanText,
-        model_id: ELEVENLABS_MODEL,
-        voice_settings: {
-          stability: 0.72,
-          similarity_boost: 0.88,
-          speed: 0.92,
-          style: 0.4,
-        },
-      }),
+      body: JSON.stringify(requestPayload),
     });
 
     if (!response.ok) {
-      const error = await response.text();
-      console.error('ElevenLabs error:', error);
-      return res.status(response.status).json({ error: 'ElevenLabs failed', details: error });
+      const errorText = await response.text();
+      console.error('[Speech] ElevenLabs failed', {
+        status: response.status,
+        statusText: response.statusText,
+        responseBodyPreview: errorText.substring(0, 1000),
+        request: {
+          voiceId,
+          model: ELEVENLABS_MODEL,
+          outputFormat: ELEVENLABS_OUTPUT_FORMAT,
+          text: cleanText,
+        },
+      });
+
+      return res.status(response.status).json({
+        error: `ElevenLabs failed (${response.status})`,
+        details: errorText,
+      });
     }
 
     const arrayBuffer = await response.arrayBuffer();
@@ -72,7 +97,27 @@ export default async function handler(req: any, res: any) {
 
     return res.status(200).send(buffer);
   } catch (error: any) {
-    console.error('TTS error:', error);
-    return res.status(500).json({ error: 'TTS failed', details: error.message });
+    console.error('[Speech] ElevenLabs request failed', {
+      errorMessage: error?.message || String(error),
+      errorStack: error?.stack || null,
+      request: {
+        voiceId,
+        model: ELEVENLABS_MODEL,
+        outputFormat: ELEVENLABS_OUTPUT_FORMAT,
+        text: cleanText,
+      },
+      apiKeyPresent: !!process.env.ELEVENLABS_API_KEY,
+    });
+
+    return res.status(500).json({
+      error: 'TTS failed',
+      details: error?.message || String(error),
+      request: {
+        voiceId,
+        model: ELEVENLABS_MODEL,
+        outputFormat: ELEVENLABS_OUTPUT_FORMAT,
+        textPreview: cleanText.substring(0, 1000),
+      },
+    });
   }
 }
