@@ -1,4 +1,5 @@
-import { MOODS_DATA, Scripture } from '../constants/moods';
+import { MOODS_DATA } from '../constants/moods';
+import type { Scripture } from '../constants/moods';
 import { DAVID_PERSONALITY_PROMPT } from '../constants/persona';
 
 type ChatLikeMessage = {
