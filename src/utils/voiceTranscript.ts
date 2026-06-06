@@ -2,17 +2,16 @@
 
 export const JUNK_TRANSCRIPT_PATTERNS = [
   /^[\s.…,!?*-]+$/,
-  /^(thank you|thanks for watching|subscribe|you|bye|goodbye|okay|ok|um+|uh+|hmm+|ah+|oh+)[.!?\s]*$/i,
+  /^(thank you|thanks for watching|subscribe|you|bye|goodbye|okay|ok)[.!?\s]*$/i,
   /^(music|applause|\[silence\]|\[music\]|\[inaudible\])$/i,
   /^(the|a|an|i|it|so|and|but|or|well)[.!?\s]*$/i,
 ];
 
-/** Throat clear, cough, breath — common Whisper outputs on noise. */
+/** Actual environmental noise only. Natural human vocalizations are allowed. */
 export const NOISE_TRANSCRIPT_PATTERNS = [
-  /^(a+h*|u+h*m*|hmm*|mm+|mhm+|uh+h*|oh+h*)[.!?\s]*$/i,
   /^(cough|coughing|\*cough\*|clears? throat|sniff|sneeze|burp|yawn)[.!?\s]*$/i,
-  /^(breathing|inhales?|exhales?|sigh|sighs)[.!?\s]*$/i,
-  /^\[.*\]$/,
+  /^(breathing|inhales?|exhales?)[.!?\s]*$/i,
+  /^\[(music|silence|inaudible|noise|static)\]$/i,
 ];
 
 /** True session openers — used to block a second greeting mid-session. */
@@ -68,6 +67,21 @@ const INTENTIONAL_SHORT_PHRASES = [
   /^what('?s|\s+is)\s+/i,
   /^can\s+you/i,
   /^david/i,
+  /^(um|uh|hmm|hm|mhm|ah|oh|wow|yeah|yep|nope)$/i,
+];
+
+const ALLOWED_HUMAN_SOUNDS = [
+  'um',
+  'uh',
+  'hmm',
+  'hm',
+  'mhm',
+  'ah',
+  'oh',
+  'wow',
+  'yeah',
+  'yep',
+  'nope',
 ];
 
 function isIntentionalShortPhrase(text: string): boolean {
@@ -83,41 +97,63 @@ export function isJunkTranscript(text: string): boolean {
   const normalized = normalizeTranscript(text);
   if (!normalized) return true;
   if (normalized.length < 3) return true;
-  // Allow intentional short phrases like "Hi David" through
+
+  // Allow intentional short phrases like "Hi David" and natural sounds like "hmm" through.
   if (isIntentionalShortPhrase(normalized)) return false;
+
   if (JUNK_TRANSCRIPT_PATTERNS.some(re => re.test(normalized))) return true;
   if (NOISE_TRANSCRIPT_PATTERNS.some(re => re.test(normalized))) return true;
+
   const words = normalized.split(/\s+/).filter(Boolean);
-  if (words.length === 1 && words[0].length <= 4) return true;
+
+  if (
+    words.length === 1 &&
+    words[0].length <= 4 &&
+    !ALLOWED_HUMAN_SOUNDS.includes(words[0])
+  ) {
+    return true;
+  }
+
   return false;
 }
 
 /** Require enough real language before calling the AI. */
 export function isMeaningfulTranscript(text: string): boolean {
   if (isJunkTranscript(text)) return false;
+
   const trimmed = text.trim();
-  // Intentional short phrases always pass — they are real user speech
+
+  // Intentional short phrases always pass — they are real user speech.
   if (isIntentionalShortPhrase(trimmed)) return true;
+
   const words = trimmed.split(/\s+/).filter(Boolean);
   if (words.length < MIN_MEANINGFUL_WORDS) return false;
+
   const letters = trimmed.replace(/[^a-zA-Z]/g, '');
   if (letters.length < MIN_MEANINGFUL_LETTERS) return false;
+
   return true;
 }
 
 export function transcriptsAreSimilar(a: string, b: string): boolean {
   if (a === b) return true;
   if (!a || !b) return false;
+
   const shorter = a.length <= b.length ? a : b;
   const longer = a.length <= b.length ? b : a;
+
   if (longer.includes(shorter) && shorter.length >= 6) return true;
+
   const maxLen = Math.max(a.length, b.length);
   if (maxLen === 0) return true;
+
   let matches = 0;
   const minLen = Math.min(a.length, b.length);
+
   for (let i = 0; i < minLen; i++) {
     if (a[i] === b[i]) matches++;
   }
+
   return matches / maxLen >= 0.85;
 }
 
