@@ -1,6 +1,6 @@
-import { MOODS_DATA } from '../constants/moods';
-import type { Scripture } from '../constants/moods';
-import { DAVID_PERSONALITY_PROMPT } from '../constants/persona';
+import { MOODS_DATA } from '../constants/moods.js';
+import type { Scripture } from '../constants/moods.js';
+import { DAVID_PERSONALITY_PROMPT } from '../constants/persona.js';
 
 type ChatLikeMessage = {
   role?: string;
