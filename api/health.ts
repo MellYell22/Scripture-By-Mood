@@ -1,12 +1,22 @@
 export default async function handler(req: any, res: any) {
-  const cartesiaVoiceId = process.env.CARTESIA_VOICE_ID || 'a5136bf9-224c-4d76-b823-52bd5efcffcc';
+  const requiredEnvVars = [
+    'OPENAI_API_KEY',
+    'ELEVENLABS_API_KEY',
+    'ELEVENLABS_VOICE_ID',
+    'VITE_SUPABASE_URL',
+    'VITE_SUPABASE_ANON_KEY',
+    'APP_URL',
+    'ELEVENLABS_MODEL',
+    'ELEVENLABS_OUTPUT_FORMAT',
+  ] as const;
+
+  const configured = Object.fromEntries(
+    requiredEnvVars.map((name) => [name, Boolean(process.env[name]?.trim())]),
+  );
+
   res.status(200).json({
     status: "ok",
-    env: process.env.NODE_ENV,
-    appUrl: process.env.APP_URL || "not set",
-    openaiConfigured: !!process.env.OPENAI_API_KEY,
-    cartesiaConfigured: !!process.env.CARTESIA_API_KEY,
-    cartesiaVoiceId,
-    supabaseConfigured: !!(process.env.VITE_SUPABASE_URL && process.env.VITE_SUPABASE_ANON_KEY),
+    configured,
+    allConfigured: requiredEnvVars.every((name) => Boolean(process.env[name]?.trim())),
   });
 }

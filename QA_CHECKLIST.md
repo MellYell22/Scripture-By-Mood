@@ -58,10 +58,10 @@
 - [x] Error handling for API key and quota issues
 - [x] Temperature set to 0.9 for natural variation
 
-### Cartesia Text-to-Speech
-- [x] Cartesia voice ID configured
-- [x] Sonic model for fast, natural speech
-- [x] Cartesia byte-stream MP3 output configured
+### ElevenLabs Text-to-Speech
+- [x] ElevenLabs voice ID configured
+- [x] ElevenLabs model configured for natural speech
+- [x] ElevenLabs MP3 output configured
 - [x] Comprehensive error logging
 - [x] Audio format: MP3
 

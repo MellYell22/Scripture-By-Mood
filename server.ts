@@ -282,15 +282,25 @@ app.post("/api/stripe-webhook", async (req: any, res) => {
 
 // API Routes
 app.get("/api/health", (req, res) => {
+  const requiredEnvVars = [
+    'OPENAI_API_KEY',
+    'ELEVENLABS_API_KEY',
+    'ELEVENLABS_VOICE_ID',
+    'VITE_SUPABASE_URL',
+    'VITE_SUPABASE_ANON_KEY',
+    'APP_URL',
+    'ELEVENLABS_MODEL',
+    'ELEVENLABS_OUTPUT_FORMAT',
+  ] as const;
+
+  const configured = Object.fromEntries(
+    requiredEnvVars.map((name) => [name, Boolean(process.env[name]?.trim())]),
+  );
+
   res.json({
-    status: "ok", 
-    stripeConfigured: !!getStripe(),
-    supabaseConfigured: !!supabase,
-    openaiConfigured: !!process.env.OPENAI_API_KEY,
-    elevenLabsConfigured: !!process.env.ELEVENLABS_API_KEY,
-    elevenLabsVoiceId: process.env.ELEVENLABS_VOICE_ID || DAVID_ELEVENLABS_VOICE_ID,
-    env: process.env.NODE_ENV,
-    appUrl: process.env.APP_URL || "not set"
+    status: "ok",
+    configured,
+    allConfigured: requiredEnvVars.every((name) => Boolean(process.env[name]?.trim())),
   });
 });
 

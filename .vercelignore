@@ -4,4 +4,4 @@
 voice-test.wav
 speech_test_out.bin
 *_test_out.bin
-cartesia_audio_*.wav
+elevenlabs_audio_*.wav
