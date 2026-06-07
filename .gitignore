@@ -21,6 +21,9 @@ Thumbs.db
 # Debug logs
 npm-debug.log*
 pnpm-debug.log*
+*.log
+codex-preview-*
+package-lock.json
 .env*.local
 
 .vercel
