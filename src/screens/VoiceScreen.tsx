@@ -87,7 +87,7 @@ const updateUsedVerseForMood = (input: {
   });
 };
 
-export default function VoiceScreen() {
+export default function VoiceScreen(_props?: any) {
   const { profile, session, loading: userContextLoading } = useUser();
 
   const [phase, setPhase] = useState<ScreenPhase>('checking');
