@@ -14,7 +14,7 @@ import { Lock, PhoneCall, PhoneOff, Send, Sparkles } from 'lucide-react';
 import { generateSpeech, getDavidVoiceResponse, transcribeAudio } from '../services/ai';
 import { useUser } from '../UserContext';
 import { hasProAccess, OWNER_EMAIL } from '../utils/tier';
-import { humanizeForTts, prepareDavidTtsPayload } from '../utils/davidSpeechDelivery';
+import { prepareDavidTtsPayload } from '../utils/davidSpeechDelivery';
 import { detectMoodKeyFromMessages } from '../utils/davidMoodContext';
 
 const IDLE_VOICE_LEVELS = [0.18, 0.26, 0.2, 0.3, 0.22, 0.34, 0.24, 0.31, 0.2];
@@ -87,7 +87,7 @@ const updateUsedVerseForMood = (input: {
   });
 };
 
-export default function VoiceScreen() {
+export default function VoiceScreen(_props?: any) {
   const { profile, session, loading: userContextLoading } = useUser();
 
   const [phase, setPhase] = useState<ScreenPhase>('checking');
@@ -108,6 +108,8 @@ export default function VoiceScreen() {
   const voiceActivityFrameRef = useRef<number | null>(null);
   const voiceLevelsRef = useRef<number[]>(IDLE_VOICE_LEVELS);
   const mountedRef = useRef(true);
+  const phaseRef = useRef<ScreenPhase>('checking');
+  const callGenerationRef = useRef(0);
 
   const hasVoiceAccess = useMemo(() => {
     if (profile && hasProAccess(profile)) return true;
@@ -131,6 +133,13 @@ export default function VoiceScreen() {
 
     setPhase(currentPhase => currentPhase === 'checking' ? 'ready' : currentPhase);
   }, [hasVoiceAccess, userContextLoading]);
+
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
+
+  const isCurrentCallGeneration = (generation: number) =>
+    mountedRef.current && callGenerationRef.current === generation;
 
   const stopCurrentAudio = () => {
     try {
@@ -254,7 +263,7 @@ export default function VoiceScreen() {
     return '';
   };
 
-  const startListening = async () => {
+  const startListening = async (generation = callGenerationRef.current) => {
     if (Platform.OS !== 'web') {
       setError('Microphone input is available in the web preview.');
       return;
@@ -270,6 +279,11 @@ export default function VoiceScreen() {
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (!isCurrentCallGeneration(generation)) {
+        stream.getTracks().forEach(track => track.stop());
+        return;
+      }
+
       const mimeType = getRecordingMimeType();
       const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
       startVoiceActivity(stream);
@@ -287,7 +301,7 @@ export default function VoiceScreen() {
       };
 
       recorder.onerror = () => {
-        if (!mountedRef.current) return;
+        if (!isCurrentCallGeneration(generation)) return;
         stopVoiceActivity();
         setError('David had trouble accessing the microphone. Check microphone permissions and try again.');
         setPhase('ready');
@@ -300,8 +314,8 @@ export default function VoiceScreen() {
         mediaStreamRef.current = null;
         mediaRecorderRef.current = null;
 
-        if (!mountedRef.current || !chunks.length) {
-          if (mountedRef.current && !discardRecordingRef.current) {
+        if (!isCurrentCallGeneration(generation) || !chunks.length) {
+          if (isCurrentCallGeneration(generation) && !discardRecordingRef.current) {
             setError("David couldn't hear enough audio. Try holding the mic a little longer.");
             setPhase('ready');
           }
@@ -320,6 +334,8 @@ export default function VoiceScreen() {
             type: recordingMimeTypeRef.current || 'audio/webm',
           });
           const result = await transcribeAudio(audioBlob);
+          if (!isCurrentCallGeneration(generation)) return;
+
           const transcript = result.transcript.trim();
 
           if (!transcript) {
@@ -332,9 +348,9 @@ export default function VoiceScreen() {
           }
 
           setTextInput(transcript);
-          await submitUserText(transcript);
+          await submitUserText(transcript, generation);
         } catch (err: any) {
-          if (!mountedRef.current) return;
+          if (!isCurrentCallGeneration(generation)) return;
           setError(err?.message || "David couldn't transcribe that audio.");
           setPhase('ready');
         }
@@ -343,7 +359,7 @@ export default function VoiceScreen() {
       recorder.start();
       setPhase('listening');
     } catch (err: any) {
-      if (!mountedRef.current) return;
+      if (!isCurrentCallGeneration(generation)) return;
       const denied = err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError';
       setError(
         denied
@@ -356,11 +372,13 @@ export default function VoiceScreen() {
 
   const handleStartConversation = () => {
     if (phase === 'ready' || phase === 'error' || phase === 'ended') {
-      void startListening();
+      callGenerationRef.current += 1;
+      void startListening(callGenerationRef.current);
     }
   };
 
   const handleEndConversation = () => {
+    callGenerationRef.current += 1;
     stopListening(true);
     stopCurrentAudio();
     setTextInput('');
@@ -368,9 +386,11 @@ export default function VoiceScreen() {
     setPhase('ended');
   };
 
-  const playDavidResponseAudio = async (text: string) => {
+  const playDavidResponseAudio = async (text: string, generation = callGenerationRef.current) => {
+    if (!isCurrentCallGeneration(generation)) return;
+
     if (!text.trim()) {
-      setPhase('ready');
+      if (isCurrentCallGeneration(generation)) setPhase('ready');
       return;
     }
 
@@ -378,16 +398,17 @@ export default function VoiceScreen() {
     stopCurrentAudio();
 
     try {
-      const preparedText = prepareDavidTtsPayload(humanizeForTts(text), {
+      const preparedText = prepareDavidTtsPayload(text, {
         isGreeting: false,
       }).speechText;
       const audioUrl = await generateSpeech(preparedText, { alreadyPrepared: true });
+      if (!isCurrentCallGeneration(generation)) return;
 
       if (!audioUrl || Platform.OS !== 'web') {
-        if (mountedRef.current) {
+        if (isCurrentCallGeneration(generation)) {
           setError("David's text response is ready, but the audio could not be generated right now.");
+          setPhase('ready');
         }
-        setPhase('ready');
         return;
       }
 
@@ -400,7 +421,7 @@ export default function VoiceScreen() {
         const finish = () => {
           if (finished) return;
           finished = true;
-          if (!mountedRef.current) {
+          if (!isCurrentCallGeneration(generation)) {
             resolve();
             return;
           }
@@ -427,15 +448,21 @@ export default function VoiceScreen() {
         audio.play().catch(reject);
       });
     } catch (err: any) {
-      if (!mountedRef.current) return;
+      if (!isCurrentCallGeneration(generation)) return;
       setError(err?.message || 'David had trouble speaking that response.');
       setPhase('ready');
     }
   };
 
-  const submitUserText = async (rawText: string) => {
+  const submitUserText = async (rawText: string, generation = callGenerationRef.current) => {
     const userText = rawText.trim();
-    if (!userText || phase === 'thinking' || phase === 'speaking') return;
+    if (
+      !userText ||
+      !isCurrentCallGeneration(generation) ||
+      phaseRef.current === 'ended' ||
+      phaseRef.current === 'thinking' ||
+      phaseRef.current === 'speaking'
+    ) return;
 
     setTextInput('');
     setError(null);
@@ -454,6 +481,8 @@ export default function VoiceScreen() {
         moodKey: detectedMoodKey,
         usedVerses,
       });
+      if (!isCurrentCallGeneration(generation)) return;
+
       const verseReference = response.verseUsed || extractVerseMarker(response.text);
       const cleanedResponse = cleanVerseMarker(response.text);
 
@@ -471,9 +500,9 @@ export default function VoiceScreen() {
 
       setMessages(finalMessages);
       setLastResponseText(cleanedResponse);
-      await playDavidResponseAudio(cleanedResponse);
+      await playDavidResponseAudio(cleanedResponse, generation);
     } catch (err: any) {
-      if (!mountedRef.current) return;
+      if (!isCurrentCallGeneration(generation)) return;
       setError(err?.message || 'David could not respond right now.');
       setPhase('ready');
     }

@@ -88,6 +88,23 @@ serve(async (req) => {
     const isTestMode = stripeSecretKey.startsWith("sk_test_");
     console.log(`[create-checkout-session] Stripe Mode: ${isTestMode ? "TEST" : "LIVE"}`);
 
+    const proPriceId = Deno.env.get("STRIPE_PRICE_ID_PRO") || Deno.env.get("VITE_STRIPE_PRICE_ID_PRO");
+    if (!proPriceId) {
+      console.error("[create-checkout-session] CRITICAL: STRIPE_PRICE_ID_PRO is not configured.");
+      return new Response(
+        JSON.stringify({ error: "Server configuration error: Pro price missing." }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (priceId !== proPriceId) {
+      console.error(`[create-checkout-session] Rejected unrecognized priceId: ${priceId}`);
+      return new Response(
+        JSON.stringify({ error: "Invalid checkout price." }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
     const stripe = new Stripe(stripeSecretKey, {
       apiVersion: "2023-10-16",
       httpClient: Stripe.createFetchHttpClient(),

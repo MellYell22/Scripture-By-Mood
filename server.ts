@@ -43,6 +43,12 @@ const previewLogText = (value: string, maxLength = 180): string => (
   value.replace(/\s+/g, ' ').trim().slice(0, maxLength)
 );
 
+function requireUpdatedRows(data: any[] | null | undefined, context: string) {
+  if (!data || data.length === 0) {
+    throw new Error(`${context} affected 0 profile rows`);
+  }
+}
+
 // ... (existing code for lazy Stripe initialization)
 let stripeInstance: Stripe | null = null;
 function getStripe() {
@@ -162,22 +168,25 @@ app.post("/api/stripe-webhook", async (req: any, res) => {
         
         if (profile) {
           console.log(`[Server Webhook] Upgrading user ${profile.id} to Pro...`);
-          const { error } = await supabase.from('profiles').update({
+          const { data, error } = await supabase.from('profiles').update({
             stripe_customer_id: customerId,
             subscription_tier: 'pro',
             subscription_status: 'active',
             plan: 'pro',
             stripe_subscription_status: 'active',
             updated_at: new Date().toISOString()
-          }).eq('id', profile.id);
+          }).eq('id', profile.id).select('id');
 
           if (error) {
             console.error(`[Server Webhook] UPDATE FAILED for user ${profile.id}: ${error.message}`);
+            throw error;
           } else {
+            requireUpdatedRows(data, `Checkout profile update for user ${profile.id}`);
             console.log(`[Server Webhook] UPDATE SUCCESS: User ${profile.id} is now Pro.`);
           }
         } else {
           console.error(`[Server Webhook] CRITICAL: Could not resolve profile for checkout session ${session.id}`);
+          throw new Error(`Could not resolve profile for checkout session ${session.id}`);
         }
         break;
       }
@@ -195,7 +204,7 @@ app.post("/api/stripe-webhook", async (req: any, res) => {
 
         if (profile) {
           console.log(`[Server Webhook] Confirming Pro status for user ${profile.id}...`);
-          const { error } = await supabase.from('profiles').update({
+          const { data, error } = await supabase.from('profiles').update({
             stripe_customer_id: customerId,
             stripe_subscription_id: subscriptionId,
             subscription_tier: 'pro',
@@ -203,13 +212,17 @@ app.post("/api/stripe-webhook", async (req: any, res) => {
             plan: 'pro',
             stripe_subscription_status: 'active',
             updated_at: new Date().toISOString()
-          }).eq('id', profile.id);
+          }).eq('id', profile.id).select('id');
           
           if (error) {
             console.error(`[Server Webhook] UPDATE FAILED for user ${profile.id} on invoice: ${error.message}`);
+            throw error;
           } else {
+            requireUpdatedRows(data, `Invoice profile update for user ${profile.id}`);
             console.log(`[Server Webhook] UPDATE SUCCESS: User ${profile.id} Pro status confirmed.`);
           }
+        } else {
+          throw new Error(`Could not resolve profile for invoice ${invoice.id}`);
         }
         break;
       }
@@ -231,7 +244,7 @@ app.post("/api/stripe-webhook", async (req: any, res) => {
         
         if (profile) {
           console.log(`[Server Webhook] Syncing user ${profile.id} to tier ${tier}...`);
-          const { error } = await supabase.from('profiles').update({
+          const { data, error } = await supabase.from('profiles').update({
             stripe_customer_id: customerId,
             stripe_subscription_id: subscription.id,
             subscription_tier: tier,
@@ -239,13 +252,17 @@ app.post("/api/stripe-webhook", async (req: any, res) => {
             plan: tier,
             stripe_subscription_status: status,
             updated_at: new Date().toISOString()
-          }).eq('id', profile.id);
+          }).eq('id', profile.id).select('id');
 
           if (error) {
             console.error(`[Server Webhook] SYNC FAILED for user ${profile.id}: ${error.message}`);
+            throw error;
           } else {
+            requireUpdatedRows(data, `Subscription profile update for user ${profile.id}`);
             console.log(`[Server Webhook] SYNC SUCCESS: User ${profile.id} profile synchronized.`);
           }
+        } else {
+          throw new Error(`Could not resolve profile for subscription ${subscription.id}`);
         }
         break;
       }
@@ -260,19 +277,23 @@ app.post("/api/stripe-webhook", async (req: any, res) => {
         
         if (profile) {
           console.log(`[Server Webhook] Reverting user ${profile.id} to Free...`);
-          const { error } = await supabase.from('profiles').update({
+          const { data, error } = await supabase.from('profiles').update({
             subscription_tier: 'free',
             subscription_status: 'canceled',
             plan: 'free',
             stripe_subscription_status: 'canceled',
             updated_at: new Date().toISOString()
-          }).eq('id', profile.id);
+          }).eq('id', profile.id).select('id');
 
           if (error) {
             console.error(`[Server Webhook] CANCELLATION FAILED for user ${profile.id}: ${error.message}`);
+            throw error;
           } else {
+            requireUpdatedRows(data, `Subscription deletion profile update for user ${profile.id}`);
             console.log(`[Server Webhook] CANCELLATION SUCCESS: User ${profile.id} downgraded to free.`);
           }
+        } else {
+          throw new Error(`Could not resolve profile for deleted subscription ${subscription.id}`);
         }
         break;
       }
@@ -660,7 +681,6 @@ app.post("/api/transcribe", express.raw({ type: '*/*', limit: '25mb' }), async (
       model: 'whisper-1',
       language: 'en',
       responseFormat: 'json',
-      prompt: 'Spiritual conversation in English.',
       temperature: 0,
       filename: safeFilename,
       mimeType,
@@ -671,7 +691,6 @@ app.post("/api/transcribe", express.raw({ type: '*/*', limit: '25mb' }), async (
       model: 'whisper-1',
       language: 'en',
       response_format: 'json',
-      prompt: 'Spiritual conversation in English.',
       temperature: 0,
     });
 

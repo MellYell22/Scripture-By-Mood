@@ -32,7 +32,7 @@ const BIBLE_BOOKS = [
   { name: '3 John', chapters: 1 }, { name: 'Jude', chapters: 1 }, { name: 'Revelation', chapters: 22 }
 ];
 
-export default function BibleBrowserScreen() {
+export default function BibleBrowserScreen(_props?: any) {
   const [view, setView] = useState<'books' | 'chapters' | 'verses' | 'content'>('books');
   const [selectedBook, setSelectedBook] = useState<typeof BIBLE_BOOKS[0] | null>(null);
   const [selectedChapter, setSelectedChapter] = useState<number | null>(null);
