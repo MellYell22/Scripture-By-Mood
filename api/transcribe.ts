@@ -4,7 +4,7 @@ import {
   getPublicOpenAIErrorMessage,
   logOpenAIError,
   OPENAI_API_KEY_ENV_NAME,
-} from '../lib/openaiEnv';
+} from '../lib/openaiEnv.js';
 
 const JUNK_TRANSCRIPT_PATTERNS = [
   /^[\s.…,!?*-]+$/,

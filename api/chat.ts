@@ -5,7 +5,7 @@ import {
   getPublicOpenAIHttpStatus,
   logOpenAIError,
   OPENAI_API_KEY_ENV_NAME,
-} from '../lib/openaiEnv';
+} from '../lib/openaiEnv.js';
 import {
   buildDavidScriptureGuidance,
   buildDavidSystemPromptFromGuidance,
