@@ -20,7 +20,7 @@ type RouteState = {
 };
 
 function AppShell() {
-  const { session, profile, loading, signOut } = useUser();
+  const { session, profile, loading } = useUser();
   const [route, setRoute] = useState<RouteState>({ name: 'Home' });
 
   const navigation = useMemo(() => ({
@@ -49,13 +49,6 @@ function AppShell() {
 
   return (
     <View style={styles.appShell}>
-      <View style={styles.testBanner}>
-        <Text style={styles.testBannerText}>BIBLE MOOD SEARCH</Text>
-        <TouchableOpacity onPress={signOut}>
-          <Text style={styles.signOutText}>SIGN OUT</Text>
-        </TouchableOpacity>
-      </View>
-
       <View style={styles.screenWrap}>
         {route.name === 'Home' && <HomeScreen navigation={navigation} />}
         {route.name === 'Mood' && <MoodScreen {...screenProps} />}
@@ -105,26 +98,6 @@ const styles = StyleSheet.create({
     flex: 1,
     minHeight: Platform.OS === 'web' ? '100vh' : undefined,
     backgroundColor: '#0b1e3d',
-  },
-  testBanner: {
-    backgroundColor: '#B91C1C',
-    paddingHorizontal: 14,
-    paddingVertical: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  testBannerText: {
-    color: '#FFFFFF',
-    fontWeight: '900',
-    fontSize: 12,
-    letterSpacing: 1.6,
-  },
-  signOutText: {
-    color: '#FFFFFF',
-    fontWeight: '900',
-    fontSize: 11,
-    letterSpacing: 1.2,
   },
   screenWrap: {
     flex: 1,
