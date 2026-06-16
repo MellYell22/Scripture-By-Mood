@@ -22,6 +22,7 @@ type ScreenPhase =
   | 'checking'
   | 'ready'
   | 'ended'
+  | 'starting'
   | 'listening'
   | 'transcribing'
   | 'thinking'
@@ -162,6 +163,31 @@ export default function VoiceScreen() {
     setVoiceLevels(IDLE_VOICE_LEVELS);
   };
 
+  const startSyntheticVoiceActivity = () => {
+    stopVoiceActivity();
+
+    const tick = () => {
+      if (!mountedRef.current) return;
+
+      const now = performance.now();
+      const nextLevels = IDLE_VOICE_LEVELS.map((idleLevel, index) => {
+        const rise =
+          Math.abs(Math.sin(now / 185 + index * 0.76)) * 0.36 +
+          Math.abs(Math.cos(now / 295 + index * 0.47)) * 0.18;
+        const target = Math.max(0.18, Math.min(0.86, idleLevel + rise));
+        const previous = voiceLevelsRef.current[index] || idleLevel;
+
+        return previous + (target - previous) * 0.22;
+      });
+
+      voiceLevelsRef.current = nextLevels;
+      setVoiceLevels(nextLevels);
+      voiceActivityFrameRef.current = requestAnimationFrame(tick);
+    };
+
+    tick();
+  };
+
   const startVoiceActivity = (stream: MediaStream) => {
     stopVoiceActivity();
 
@@ -170,7 +196,10 @@ export default function VoiceScreen() {
         window.AudioContext ||
         (window as unknown as { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
 
-      if (!AudioContextCtor) return;
+      if (!AudioContextCtor) {
+        startSyntheticVoiceActivity();
+        return;
+      }
 
       const audioContext = new AudioContextCtor();
       const analyser = audioContext.createAnalyser();
@@ -223,8 +252,7 @@ export default function VoiceScreen() {
 
       tick();
     } catch {
-      voiceLevelsRef.current = IDLE_VOICE_LEVELS;
-      setVoiceLevels(IDLE_VOICE_LEVELS);
+      startSyntheticVoiceActivity();
     }
   };
 
@@ -272,12 +300,17 @@ export default function VoiceScreen() {
 
     stopCurrentAudio();
     setError(null);
+    setPhase('starting');
+    startSyntheticVoiceActivity();
 
+    let pendingStream: MediaStream | null = null;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      pendingStream = stream;
       const mimeType = getRecordingMimeType();
       const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
       startVoiceActivity(stream);
+      pendingStream = null;
 
       audioChunksRef.current = [];
       discardRecordingRef.current = false;
@@ -294,7 +327,7 @@ export default function VoiceScreen() {
       recorder.onerror = () => {
         if (!mountedRef.current) return;
         stopVoiceActivity();
-        setError('David had trouble accessing the microphone. Check microphone permissions and try again.');
+        setError('David had trouble accessing the microphone. Allow microphone access for localhost, then try again.');
         setPhase('ready');
       };
 
@@ -349,10 +382,12 @@ export default function VoiceScreen() {
       setPhase('listening');
     } catch (err: any) {
       if (!mountedRef.current) return;
+      pendingStream?.getTracks().forEach(track => track.stop());
+      stopVoiceActivity();
       const denied = err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError';
       setError(
         denied
-          ? 'Microphone access is blocked. Allow the microphone for localhost in the browser, then try again.'
+          ? 'Microphone access is blocked for this browser preview. Allow microphone access for localhost, then tap Start Conversation again.'
           : 'David could not start listening. Check that your microphone is available.',
       );
       setPhase('ready');
@@ -506,12 +541,18 @@ export default function VoiceScreen() {
   const inputIsDisabled =
     phase === 'thinking' ||
     phase === 'speaking' ||
+    phase === 'starting' ||
     phase === 'listening' ||
     phase === 'transcribing';
-  const voiceActivityIsVisible = phase === 'listening';
+  const voiceWaveIsActive = phase === 'starting' || phase === 'listening';
   const startConversationIsEnabled = phase === 'ready' || phase === 'error' || phase === 'ended';
   const endConversationIsEnabled = phase === 'listening';
-  const voiceWaveLabel = voiceActivityIsVisible ? 'Listening' : 'Voice ready';
+  const voiceWaveLabel =
+    phase === 'starting'
+      ? 'Opening microphone'
+      : phase === 'listening'
+        ? 'Listening'
+        : 'Voice ready';
 
   return (
     <View style={styles.outerContainer}>
@@ -530,6 +571,8 @@ export default function VoiceScreen() {
                 ? 'Call ended. Start again when you are ready.'
                 : phase === 'thinking'
                   ? 'David is reflecting...'
+                  : phase === 'starting'
+                    ? 'Opening your microphone...'
                   : phase === 'listening'
                     ? 'David is listening now. Tap End Conversation when you finish.'
                     : phase === 'transcribing'
@@ -543,16 +586,16 @@ export default function VoiceScreen() {
         <View
           style={[
             styles.voiceWavePanel,
-            voiceActivityIsVisible && styles.voiceWavePanelActive,
+            voiceWaveIsActive && styles.voiceWavePanelActive,
           ]}
           accessibilityRole="image"
-          accessibilityLabel={voiceActivityIsVisible ? 'Active voice wave' : 'Inactive voice wave'}
+          accessibilityLabel={voiceWaveIsActive ? 'Active voice wave' : 'Inactive voice wave'}
         >
           <View style={styles.voiceWaveHeader}>
             <View
               style={[
                 styles.voiceWaveDot,
-                voiceActivityIsVisible && styles.voiceWaveDotActive,
+                voiceWaveIsActive && styles.voiceWaveDotActive,
               ]}
             />
             <Text style={styles.voiceWaveLabel}>{voiceWaveLabel}</Text>
@@ -563,10 +606,10 @@ export default function VoiceScreen() {
                 key={index}
                 style={[
                   styles.voiceWaveBar,
-                  voiceActivityIsVisible && styles.voiceWaveBarActive,
+                  voiceWaveIsActive && styles.voiceWaveBarActive,
                   {
-                    height: voiceActivityIsVisible ? 14 + level * 64 : 10 + level * 22,
-                    opacity: voiceActivityIsVisible ? 0.58 + level * 0.42 : 0.28 + level * 0.2,
+                    height: voiceWaveIsActive ? 14 + level * 64 : 10 + level * 22,
+                    opacity: voiceWaveIsActive ? 0.58 + level * 0.42 : 0.28 + level * 0.2,
                   },
                 ]}
               />
