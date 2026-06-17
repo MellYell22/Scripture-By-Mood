@@ -65,9 +65,10 @@ export default function ProfileScreen({ route, navigation }: { route?: { params?
     if (hasHandledRedirect.current) return;
 
     // Check for URL parameters (success/canceled)
-    const urlParams = new URLSearchParams(window.location.search);
-    const success = urlParams.get('success') === 'true' || route?.params?.success || route?.params?.paymentSuccess;
-    const canceled = urlParams.get('canceled') === 'true' || route?.params?.canceled;
+    const hasWindow = typeof window !== 'undefined';
+    const urlParams = hasWindow ? new URLSearchParams(window.location.search) : null;
+    const success = urlParams?.get('success') === 'true' || route?.params?.success || route?.params?.paymentSuccess;
+    const canceled = urlParams?.get('canceled') === 'true' || route?.params?.canceled;
     const showPricing = route?.params?.showPricing;
 
     if (success || canceled) {
@@ -82,31 +83,6 @@ export default function ProfileScreen({ route, navigation }: { route?: { params?
           setIsActivating(true);
           setStatusMessage({ text: 'Payment received! Activating your Pro plan...', type: 'info' });
           
-          // Fallback: If webhook fails, we optimistically update the tier from the frontend
-          // since Stripe already verified payment to reach this success URL.
-          const forceUpdateTier = async () => {
-            try {
-              if (profile?.id) {
-                console.log('[StripeDebug] Applying optimistic Pro tier update to DB...');
-                const { error } = await supabase
-                  .from('profiles')
-                  .update({ 
-                    subscription_tier: 'pro',
-                    subscription_status: 'active'
-                  })
-                  .eq('id', profile.id);
-                  
-                if (error) {
-                  console.error('[StripeDebug] Optimistic update failed:', error);
-                } else {
-                  console.log('[StripeDebug] Optimistic update successful.');
-                }
-              }
-            } catch (err) {
-              console.error('[StripeDebug] Optimistic update error:', err);
-            }
-          };
-
           // Start polling for subscription update
           let attempts = 0;
           const maxAttempts = 15; 
@@ -115,11 +91,6 @@ export default function ProfileScreen({ route, navigation }: { route?: { params?
             attempts++;
             console.log(`[StripeDebug] Polling subscription status (Attempt ${attempts}/${maxAttempts})...`);
             
-            // On attempt 3, if still free, force the update
-            if (attempts === 3) {
-               await forceUpdateTier();
-            }
-
             const latestProfile = await refreshProfile(false);
             
             if (latestProfile?.subscription_tier === 'pro' || latestProfile?.subscription_tier === 'owner') {
@@ -153,11 +124,11 @@ export default function ProfileScreen({ route, navigation }: { route?: { params?
 
       // 1. Clear Params from React Navigation state if possible
       if (navigation && navigation.setParams) {
-        navigation.setParams({ success: undefined, canceled: undefined });
+        navigation.setParams({ success: undefined, canceled: undefined, paymentSuccess: undefined });
       }
 
       // 2. Clear params from Browser URL bar without reload
-      if (typeof window !== 'undefined' && window.history) {
+      if (hasWindow && window.history) {
         const cleanUrl = window.location.pathname;
         window.history.replaceState({}, '', cleanUrl);
       }

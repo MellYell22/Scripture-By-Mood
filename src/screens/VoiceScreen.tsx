@@ -13,8 +13,16 @@ import { Lock, Mic, Send, Sparkles, Square } from 'lucide-react';
 import { generateSpeech, getDavidVoiceResponse, transcribeAudio } from '../services/ai';
 import { useUser } from '../UserContext';
 import { hasProAccess, OWNER_EMAIL } from '../utils/tier';
-import { humanizeForTts, prepareDavidTtsPayload } from '../utils/davidSpeechDelivery';
+import { prepareDavidTtsPayload } from '../utils/davidSpeechDelivery';
 import { detectMoodKeyFromMessages } from '../utils/davidMoodContext';
+import { DAVID_ANTI_REPEAT_FALLBACKS } from '../constants/persona';
+import {
+  isDuplicateTranscript,
+  isMeaningfulTranscript,
+  looksLikeBannedTherapyPhrase,
+  looksLikeOpeningGreeting,
+  normalizeTranscript,
+} from '../utils/voiceTranscript';
 
 const IDLE_VOICE_LEVELS = [0.18, 0.26, 0.2, 0.3, 0.22, 0.34, 0.24, 0.31, 0.2];
 
@@ -108,6 +116,9 @@ export default function VoiceScreen() {
   const voiceActivityFrameRef = useRef<number | null>(null);
   const voiceLevelsRef = useRef<number[]>(IDLE_VOICE_LEVELS);
   const mountedRef = useRef(true);
+  const lastTranscriptRef = useRef('');
+  const recentTranscriptsRef = useRef<string[]>([]);
+  const responseFallbackIndexRef = useRef(0);
 
   const hasVoiceAccess = useMemo(() => {
     if (profile && hasProAccess(profile)) return true;
@@ -161,6 +172,32 @@ export default function VoiceScreen() {
     analyserRef.current = null;
     voiceLevelsRef.current = IDLE_VOICE_LEVELS;
     setVoiceLevels(IDLE_VOICE_LEVELS);
+  };
+
+  const rememberTranscript = (normalizedTranscript: string) => {
+    lastTranscriptRef.current = normalizedTranscript;
+    recentTranscriptsRef.current = [
+      ...recentTranscriptsRef.current,
+      normalizedTranscript,
+    ].slice(-6);
+  };
+
+  const nextAntiRepeatFallback = () => {
+    const fallback = DAVID_ANTI_REPEAT_FALLBACKS[
+      responseFallbackIndexRef.current % DAVID_ANTI_REPEAT_FALLBACKS.length
+    ];
+    responseFallbackIndexRef.current += 1;
+    return fallback;
+  };
+
+  const cleanDavidResponseForSession = (text: string) => {
+    const cleaned = cleanVerseMarker(text);
+
+    if (looksLikeOpeningGreeting(cleaned) || looksLikeBannedTherapyPhrase(cleaned)) {
+      return nextAntiRepeatFallback();
+    }
+
+    return cleaned;
   };
 
   const startSyntheticVoiceActivity = () => {
@@ -360,7 +397,7 @@ export default function VoiceScreen() {
           const result = await transcribeAudio(audioBlob);
           const transcript = result.transcript.trim();
 
-          if (!transcript) {
+          if (!transcript || result.rejected) {
             const reason = result.reason === 'audio_too_small'
               ? 'Try holding the mic a little longer before tapping stop.'
               : 'Try speaking a little closer to the microphone.';
@@ -369,6 +406,20 @@ export default function VoiceScreen() {
             return;
           }
 
+          if (!isMeaningfulTranscript(transcript)) {
+            setError("David heard background noise, but not enough words to answer. Try again when you're ready to speak.");
+            setPhase('ready');
+            return;
+          }
+
+          const normalizedTranscript = normalizeTranscript(transcript);
+          if (isDuplicateTranscript(normalizedTranscript, lastTranscriptRef.current, recentTranscriptsRef.current)) {
+            setError("David heard the same phrase again, so he paused instead of repeating himself. Try saying it another way.");
+            setPhase('ready');
+            return;
+          }
+
+          rememberTranscript(normalizedTranscript);
           setTextInput(transcript);
           await submitUserText(transcript);
         } catch (err: any) {
@@ -418,8 +469,9 @@ export default function VoiceScreen() {
     stopCurrentAudio();
 
     try {
-      const preparedText = prepareDavidTtsPayload(humanizeForTts(text), {
+      const preparedText = prepareDavidTtsPayload(text, {
         isGreeting: false,
+        skipOpener: true,
       }).speechText;
       const audioUrl = await generateSpeech(preparedText, { alreadyPrepared: true });
 
@@ -495,7 +547,7 @@ export default function VoiceScreen() {
         usedVerses,
       });
       const verseReference = response.verseUsed || extractVerseMarker(response.text);
-      const cleanedResponse = cleanVerseMarker(response.text);
+      const cleanedResponse = cleanDavidResponseForSession(response.text);
 
       updateUsedVerseForMood({
         userId,
