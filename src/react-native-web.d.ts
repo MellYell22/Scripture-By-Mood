@@ -3,16 +3,16 @@ declare module 'react-native' {
 
   export type StyleProp<T = Record<string, unknown>> = T | T[] | null | undefined;
 
-  export const View: React.ComponentType<any>;
+  export class View extends React.Component<any> {
+    measureLayout?: (...args: any[]) => void;
+  }
   export const Text: React.ComponentType<any>;
   export const TouchableOpacity: React.ComponentType<any>;
-  export const ScrollView: React.ComponentType<any> & {
-    prototype: {
-      scrollTo?: (options: any) => void;
-      getInnerViewNode?: () => any;
-      measureLayout?: (...args: any[]) => void;
-    };
-  };
+  export class ScrollView extends React.Component<any> {
+    scrollTo?: (options: any) => void;
+    getInnerViewNode?: () => any;
+    measureLayout?: (...args: any[]) => void;
+  }
   export const TextInput: React.ComponentType<any>;
   export const ActivityIndicator: React.ComponentType<any>;
   export const RefreshControl: React.ComponentType<any>;
@@ -27,6 +27,15 @@ declare module 'react-native' {
   export const Platform: {
     OS: 'web' | 'ios' | 'android' | string;
     select: <T>(values: Record<string, T>) => T | undefined;
+  };
+
+  export const Dimensions: {
+    get: (dimension: 'window' | 'screen' | string) => {
+      width: number;
+      height: number;
+      scale: number;
+      fontScale: number;
+    };
   };
 
   export const StyleSheet: {
