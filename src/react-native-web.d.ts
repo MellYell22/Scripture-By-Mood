@@ -1,21 +1,24 @@
 declare module 'react-native' {
-  import type { ComponentType } from 'react';
+  import * as React from 'react';
 
   export type StyleProp<T = Record<string, unknown>> = T | T[] | null | undefined;
   export type ViewStyle = Record<string, unknown>;
   export type TextStyle = Record<string, unknown>;
   export type ImageStyle = Record<string, unknown>;
 
-  export const View: ComponentType<any>;
-  export const Text: ComponentType<any>;
-  export const TextInput: ComponentType<any>;
-  export const TouchableOpacity: ComponentType<any>;
-  export const ScrollView: ComponentType<any>;
-  export const ActivityIndicator: ComponentType<any>;
-  export const FlatList: ComponentType<any>;
-  export const KeyboardAvoidingView: ComponentType<any>;
-  export const RefreshControl: ComponentType<any>;
-  export const Modal: ComponentType<any>;
+  export class View extends React.Component<any> {}
+  export class Text extends React.Component<any> {}
+  export class TextInput extends React.Component<any> {}
+  export class TouchableOpacity extends React.Component<any> {}
+  export class ScrollView extends React.Component<any> {
+    scrollTo: (...args: any[]) => void;
+    getInnerViewNode: () => any;
+  }
+  export class ActivityIndicator extends React.Component<any> {}
+  export class FlatList<ItemT = any> extends React.Component<any> {}
+  export class KeyboardAvoidingView extends React.Component<any> {}
+  export class RefreshControl extends React.Component<any> {}
+  export class Modal extends React.Component<any> {}
 
   export const Alert: {
     alert: (...args: any[]) => void;
