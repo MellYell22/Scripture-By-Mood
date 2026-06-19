@@ -6,16 +6,28 @@ declare module 'react-native' {
     style?: any;
   };
 
-  export const ActivityIndicator: React.ComponentType<NativeWebProps>;
-  export const FlatList: React.ComponentType<NativeWebProps>;
-  export const KeyboardAvoidingView: React.ComponentType<NativeWebProps>;
-  export const Modal: React.ComponentType<NativeWebProps>;
-  export const RefreshControl: React.ComponentType<NativeWebProps>;
-  export const ScrollView: React.ComponentType<NativeWebProps>;
-  export const Text: React.ComponentType<NativeWebProps>;
-  export const TextInput: React.ComponentType<NativeWebProps>;
-  export const TouchableOpacity: React.ComponentType<NativeWebProps>;
-  export const View: React.ComponentType<NativeWebProps>;
+  export class ActivityIndicator extends React.Component<NativeWebProps> {}
+  export class FlatList<ItemT = any> extends React.Component<NativeWebProps & {
+    data?: ItemT[];
+    renderItem?: (info: { item: ItemT; index: number }) => React.ReactElement | null;
+  }> {}
+  export class KeyboardAvoidingView extends React.Component<NativeWebProps> {}
+  export class Modal extends React.Component<NativeWebProps> {}
+  export class RefreshControl extends React.Component<NativeWebProps> {}
+  export class ScrollView extends React.Component<NativeWebProps> {
+    scrollTo: (options?: { x?: number; y?: number; animated?: boolean }) => void;
+    getInnerViewNode: () => any;
+  }
+  export class Text extends React.Component<NativeWebProps> {}
+  export class TextInput extends React.Component<NativeWebProps> {}
+  export class TouchableOpacity extends React.Component<NativeWebProps> {}
+  export class View extends React.Component<NativeWebProps> {
+    measureLayout: (
+      relativeToNativeNode: any,
+      onSuccess: (x: number, y: number, width: number, height: number) => void,
+      onFail?: () => void,
+    ) => void;
+  }
 
   export const Alert: {
     alert: (title: string, message?: string, buttons?: any[], options?: any) => void;
