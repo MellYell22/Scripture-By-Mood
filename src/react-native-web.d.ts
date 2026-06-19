@@ -16,6 +16,7 @@ declare module 'react-native' {
   export class RefreshControl extends React.Component<NativeWebProps> {}
   export class ScrollView extends React.Component<NativeWebProps> {
     scrollTo: (options?: { x?: number; y?: number; animated?: boolean }) => void;
+    scrollToEnd: (options?: { animated?: boolean }) => void;
     getInnerViewNode: () => any;
   }
   export class Text extends React.Component<NativeWebProps> {}
