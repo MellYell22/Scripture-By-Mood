@@ -108,6 +108,7 @@ export default function VoiceScreen() {
   const voiceActivityFrameRef = useRef<number | null>(null);
   const voiceLevelsRef = useRef<number[]>(IDLE_VOICE_LEVELS);
   const mountedRef = useRef(true);
+  const sessionGenerationRef = useRef(0);
 
   const hasVoiceAccess = useMemo(() => {
     if (profile && hasProAccess(profile)) return true;
@@ -119,6 +120,7 @@ export default function VoiceScreen() {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
+      sessionGenerationRef.current += 1;
       stopListening(true);
       stopVoiceActivity();
       stopCurrentAudio();
@@ -131,6 +133,14 @@ export default function VoiceScreen() {
 
     setPhase(currentPhase => currentPhase === 'checking' ? 'ready' : currentPhase);
   }, [hasVoiceAccess, userContextLoading]);
+
+  const beginVoiceTurn = () => {
+    sessionGenerationRef.current += 1;
+    return sessionGenerationRef.current;
+  };
+
+  const isCurrentVoiceTurn = (generation: number) =>
+    mountedRef.current && sessionGenerationRef.current === generation;
 
   const stopCurrentAudio = () => {
     try {
@@ -273,6 +283,14 @@ export default function VoiceScreen() {
     mediaRecorderRef.current = null;
   };
 
+  const cancelCurrentVoiceTurn = () => {
+    sessionGenerationRef.current += 1;
+    stopListening(true);
+    stopCurrentAudio();
+    setError(null);
+    setPhase('ready');
+  };
+
   const getRecordingMimeType = () => {
     if (typeof MediaRecorder === 'undefined') return '';
 
@@ -302,11 +320,17 @@ export default function VoiceScreen() {
     setError(null);
     setPhase('starting');
     startSyntheticVoiceActivity();
+    const generation = beginVoiceTurn();
 
     let pendingStream: MediaStream | null = null;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       pendingStream = stream;
+      if (!isCurrentVoiceTurn(generation)) {
+        stream.getTracks().forEach(track => track.stop());
+        stopVoiceActivity();
+        return;
+      }
       const mimeType = getRecordingMimeType();
       const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
       startVoiceActivity(stream);
@@ -325,7 +349,7 @@ export default function VoiceScreen() {
       };
 
       recorder.onerror = () => {
-        if (!mountedRef.current) return;
+        if (!isCurrentVoiceTurn(generation)) return;
         stopVoiceActivity();
         setError('David had trouble accessing the microphone. Allow microphone access for localhost, then try again.');
         setPhase('ready');
@@ -338,8 +362,12 @@ export default function VoiceScreen() {
         mediaStreamRef.current = null;
         mediaRecorderRef.current = null;
 
-        if (!mountedRef.current || !chunks.length) {
-          if (mountedRef.current && !discardRecordingRef.current) {
+        if (!isCurrentVoiceTurn(generation)) {
+          return;
+        }
+
+        if (!chunks.length) {
+          if (!discardRecordingRef.current) {
             setError("David couldn't hear enough audio. Try holding the mic a little longer.");
             setPhase('ready');
           }
@@ -358,6 +386,8 @@ export default function VoiceScreen() {
             type: recordingMimeTypeRef.current || 'audio/webm',
           });
           const result = await transcribeAudio(audioBlob);
+          if (!isCurrentVoiceTurn(generation)) return;
+
           const transcript = result.transcript.trim();
 
           if (!transcript) {
@@ -370,9 +400,9 @@ export default function VoiceScreen() {
           }
 
           setTextInput(transcript);
-          await submitUserText(transcript);
+          await submitUserText(transcript, generation);
         } catch (err: any) {
-          if (!mountedRef.current) return;
+          if (!isCurrentVoiceTurn(generation)) return;
           setError(err?.message || "David couldn't transcribe that audio.");
           setPhase('ready');
         }
@@ -381,8 +411,8 @@ export default function VoiceScreen() {
       recorder.start();
       setPhase('listening');
     } catch (err: any) {
-      if (!mountedRef.current) return;
       pendingStream?.getTracks().forEach(track => track.stop());
+      if (!isCurrentVoiceTurn(generation)) return;
       stopVoiceActivity();
       const denied = err?.name === 'NotAllowedError' || err?.name === 'PermissionDeniedError';
       setError(
@@ -401,18 +431,25 @@ export default function VoiceScreen() {
   };
 
   const handleEndConversation = () => {
-    if (phase !== 'listening') return;
+    if (phase !== 'listening') {
+      if (phase === 'starting' || phase === 'transcribing' || phase === 'thinking' || phase === 'speaking') {
+        cancelCurrentVoiceTurn();
+      }
+      return;
+    }
 
     setError(null);
     stopListening(false);
     setPhase('transcribing');
   };
 
-  const playDavidResponseAudio = async (text: string) => {
+  const playDavidResponseAudio = async (text: string, generation: number) => {
     if (!text.trim()) {
-      setPhase('ready');
+      if (isCurrentVoiceTurn(generation)) setPhase('ready');
       return;
     }
+
+    if (!isCurrentVoiceTurn(generation)) return;
 
     setPhase('speaking');
     stopCurrentAudio();
@@ -422,12 +459,16 @@ export default function VoiceScreen() {
         isGreeting: false,
       }).speechText;
       const audioUrl = await generateSpeech(preparedText, { alreadyPrepared: true });
+      if (!isCurrentVoiceTurn(generation)) {
+        if (audioUrl) URL.revokeObjectURL(audioUrl);
+        return;
+      }
 
       if (!audioUrl || Platform.OS !== 'web') {
-        if (mountedRef.current) {
+        if (isCurrentVoiceTurn(generation)) {
           setError("David's text response is ready, but the audio could not be generated right now.");
+          setPhase('ready');
         }
-        setPhase('ready');
         return;
       }
 
@@ -440,10 +481,6 @@ export default function VoiceScreen() {
         const finish = () => {
           if (finished) return;
           finished = true;
-          if (!mountedRef.current) {
-            resolve();
-            return;
-          }
 
           currentAudioRef.current = null;
           try {
@@ -451,7 +488,7 @@ export default function VoiceScreen() {
           } catch {
             // Ignore revoke errors.
           }
-          setPhase('ready');
+          if (isCurrentVoiceTurn(generation)) setPhase('ready');
           resolve();
         };
 
@@ -464,18 +501,25 @@ export default function VoiceScreen() {
           }
           reject(new Error("David's voice audio was returned, but the browser could not play it."));
         };
+        audio.onpause = () => {
+          if (!isCurrentVoiceTurn(generation)) finish();
+        };
+        if (!isCurrentVoiceTurn(generation)) {
+          finish();
+          return;
+        }
         audio.play().catch(reject);
       });
     } catch (err: any) {
-      if (!mountedRef.current) return;
+      if (!isCurrentVoiceTurn(generation)) return;
       setError(err?.message || 'David had trouble speaking that response.');
       setPhase('ready');
     }
   };
 
-  const submitUserText = async (rawText: string) => {
+  const submitUserText = async (rawText: string, generation = sessionGenerationRef.current) => {
     const userText = rawText.trim();
-    if (!userText || phase === 'thinking' || phase === 'speaking') return;
+    if (!userText || phase === 'thinking' || phase === 'speaking' || !isCurrentVoiceTurn(generation)) return;
 
     setTextInput('');
     setError(null);
@@ -494,6 +538,8 @@ export default function VoiceScreen() {
         moodKey: detectedMoodKey,
         usedVerses,
       });
+      if (!isCurrentVoiceTurn(generation)) return;
+
       const verseReference = response.verseUsed || extractVerseMarker(response.text);
       const cleanedResponse = cleanVerseMarker(response.text);
 
@@ -511,16 +557,17 @@ export default function VoiceScreen() {
 
       setMessages(finalMessages);
       setLastResponseText(cleanedResponse);
-      await playDavidResponseAudio(cleanedResponse);
+      await playDavidResponseAudio(cleanedResponse, generation);
     } catch (err: any) {
-      if (!mountedRef.current) return;
+      if (!isCurrentVoiceTurn(generation)) return;
       setError(err?.message || 'David could not respond right now.');
       setPhase('ready');
     }
   };
 
   const handleTextSubmit = async () => {
-    await submitUserText(textInput);
+    const generation = beginVoiceTurn();
+    await submitUserText(textInput, generation);
   };
 
   if (!userContextLoading && !hasVoiceAccess) {
@@ -546,7 +593,12 @@ export default function VoiceScreen() {
     phase === 'transcribing';
   const voiceWaveIsActive = phase === 'starting' || phase === 'listening';
   const startConversationIsEnabled = phase === 'ready' || phase === 'error' || phase === 'ended';
-  const endConversationIsEnabled = phase === 'listening';
+  const endConversationIsEnabled =
+    phase === 'starting' ||
+    phase === 'listening' ||
+    phase === 'transcribing' ||
+    phase === 'thinking' ||
+    phase === 'speaking';
   const voiceWaveLabel =
     phase === 'starting'
       ? 'Opening microphone'

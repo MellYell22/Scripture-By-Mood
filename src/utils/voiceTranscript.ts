@@ -2,6 +2,7 @@
 
 export const JUNK_TRANSCRIPT_PATTERNS = [
   /^[\s.…,!?*-]+$/,
+  /^(spiritual conversation in english|spiritual conversation)[.!?\s]*$/i,
   /^(thank you|thanks for watching|subscribe|you|bye|goodbye|okay|ok)[.!?\s]*$/i,
   /^(music|applause|\[silence\]|\[music\]|\[inaudible\])$/i,
   /^(the|a|an|i|it|so|and|but|or|well)[.!?\s]*$/i,

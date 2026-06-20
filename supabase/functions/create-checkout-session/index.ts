@@ -25,11 +25,20 @@ serve(async (req) => {
     const body = await req.json();
     console.log("[create-checkout-session] Received body:", JSON.stringify(body));
     const { priceId } = body;
+    const proPriceId = Deno.env.get("STRIPE_PRICE_ID_PRO") || Deno.env.get("VITE_STRIPE_PRICE_ID_PRO");
 
-    if (!priceId) {
-      console.error("[create-checkout-session] Error: Missing priceId");
+    if (!proPriceId) {
+      console.error("[create-checkout-session] Error: STRIPE_PRICE_ID_PRO is not configured");
       return new Response(
-        JSON.stringify({ error: "Missing priceId" }),
+        JSON.stringify({ error: "Server configuration error: Pro price is not configured." }),
+        { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    if (priceId && priceId !== proPriceId) {
+      console.error("[create-checkout-session] Error: Requested price does not match configured Pro price");
+      return new Response(
+        JSON.stringify({ error: "Invalid checkout price." }),
         { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
@@ -95,14 +104,14 @@ serve(async (req) => {
 
     // Get origin for success/cancel URLs
     const origin = req.headers.get("origin") || Deno.env.get("APP_URL") || "http://localhost:3000";
-    console.log(`[create-checkout-session] Creating session for user: ${userId}, price: ${priceId}, origin: ${origin}`);
+    console.log(`[create-checkout-session] Creating session for user: ${userId}, price: ${proPriceId}, origin: ${origin}`);
 
     try {
       const sessionOptions: any = {
         payment_method_types: ["card"],
         line_items: [
           {
-            price: priceId,
+            price: proPriceId,
             quantity: 1,
           },
         ],
