@@ -11,21 +11,31 @@ import VoiceScreen from './screens/VoiceScreen';
 import ReflectionScreen from './screens/ReflectionScreen';
 import BibleBrowserScreen from './screens/BibleBrowserScreen';
 import ProfileScreen from './screens/ProfileScreen';
+import PaymentSuccessScreen from './screens/PaymentSuccessScreen';
 
-type AppRoute = 'Home' | 'Mood' | 'Chat' | 'Voice' | 'Reflection' | 'Bible' | 'Profile';
+type AppRoute = 'Home' | 'Mood' | 'Chat' | 'Voice' | 'Reflection' | 'Bible' | 'Profile' | 'PaymentSuccess';
 
 type RouteState = {
   name: AppRoute;
   params?: Record<string, any>;
 };
 
+function getInitialRoute(): RouteState {
+  if (typeof window !== 'undefined' && window.location.pathname === '/payment-success') {
+    return { name: 'PaymentSuccess' };
+  }
+
+  return { name: 'Home' };
+}
+
 function AppShell() {
   const { session, profile, loading } = useUser();
-  const [route, setRoute] = useState<RouteState>({ name: 'Home' });
+  const [route, setRoute] = useState<RouteState>(getInitialRoute);
 
   const navigation = useMemo(() => ({
     navigate: (name: AppRoute, params?: Record<string, any>) => setRoute({ name, params }),
     goBack: () => setRoute({ name: 'Home' }),
+    reset: ({ routes }: { routes: RouteState[] }) => setRoute(routes[0] || { name: 'Home' }),
   }), []);
 
   if (loading) {
@@ -57,6 +67,7 @@ function AppShell() {
         {route.name === 'Reflection' && <ReflectionScreen {...screenProps} />}
         {route.name === 'Bible' && <BibleBrowserScreen />}
         {route.name === 'Profile' && <ProfileScreen {...screenProps} />}
+        {route.name === 'PaymentSuccess' && <PaymentSuccessScreen navigation={navigation} />}
       </View>
 
       <View style={styles.tabBar}>
