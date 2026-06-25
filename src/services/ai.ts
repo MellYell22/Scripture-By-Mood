@@ -18,6 +18,12 @@ export type GenerateSpeechOptions = {
   alreadyPrepared?: boolean;
   /** Adds a brief natural pause before requesting speech audio. */
   withThinkingDelay?: boolean;
+  /** Used by the voice state machine to cancel stale speech requests. */
+  signal?: AbortSignal;
+};
+
+type RequestOptions = {
+  signal?: AbortSignal;
 };
 
 let speechConfiguredCache: boolean | null = null;
@@ -37,6 +43,13 @@ const logApiRequest = (label: string, params: Record<string, unknown>) => {
 
 const logApiResponse = (label: string, params: Record<string, unknown>) => {
   console.log(`[API Response] ${label}`, params);
+};
+
+const throwIfAborted = (signal?: AbortSignal) => {
+  if (!signal?.aborted) return;
+  const error = new Error('Request was cancelled.');
+  error.name = 'AbortError';
+  throw error;
 };
 
 const isSpeechConfigured = async (): Promise<boolean> => {
@@ -123,7 +136,7 @@ export const getVerseOfTheDay = async (translation: string = 'NIV'): Promise<Scr
     localStorage.setItem(cacheKey, JSON.stringify(result));
     return result;
   }
-  
+
   throw new Error('Invalid verse of the day response');
 };
 
@@ -249,24 +262,17 @@ const buildVoiceConversationContext = (
     emotionalThread ? `Emotional thread to remember quietly: ${emotionalThread}` : '',
     previousAssistant ? `Do not echo David's last wording: ${previousAssistant}` : '',
     buildMemorySummary(memory),
-    'Continue the live voice conversation. Follow the user\'s current direction, avoid restarting, and keep the next spoken turn short.',
+    'Continue the live voice conversation. Follow the user current direction, avoid restarting, and keep the next spoken turn short.',
     'Use varied wording, varied scripture lead-ins, and varied endings.'
   ].filter(Boolean).join('\n');
 };
 
-const getFriendlyApiErrorMessage = async (response: Response, fallback: string): Promise<string> => {
-  const error = await response.json().catch(() => ({}));
-  const rawMessage = error.message || error.details || error.error || '';
-
-  if (response.status === 429) {
-    return "David needs a moment before answering again. Give it a little time, then try once more.";
-  }
-
-  if (response.status >= 500) {
-    return "David is having trouble connecting right now. Your keys stay private on the server, but the backend could not finish this request.";
-  }
-
-  return rawMessage || fallback;
+const buildLengthInstruction = (responseLength: ResponseLength): string => {
+  return {
+    short: "Voice turn: use the required David scripture flow, but keep every sentence warm and simple. Vary the wording.",
+    medium: "Voice turn: sound human and unscripted. Acknowledge, use scripture naturally, give one short reflection, and only ask a gentle question if it truly fits.",
+    long: "Voice turn: full David scripture flow, conversational and pastoral, no list formatting. Avoid recycled openings and repeated question endings."
+  }[responseLength];
 };
 
 export const getChatResponse = async (
@@ -288,33 +294,34 @@ export const getDavidVoiceResponse = async (
     moodKey?: string;
     usedVerses?: string[];
     userId?: string | null;
+    signal?: AbortSignal;
   } = {},
 ): Promise<DavidVoiceResponse> => {
   const responseLength = options.responseLength || 'short';
-  const lengthInstruction = {
-    short: "Voice turn: use the required David scripture flow, but keep every sentence warm and simple. Vary the wording.",
-    medium: "Voice turn: sound human and unscripted. Acknowledge, use scripture naturally, give one short reflection, and only ask a gentle question if it truly fits.",
-    long: "Voice turn: full David scripture flow, conversational and pastoral, no list formatting. Avoid recycled openings and repeated question endings."
-  }[responseLength];
+  const lengthInstruction = buildLengthInstruction(responseLength);
+
+  throwIfAborted(options.signal);
 
   const memoryUserId = await resolveDavidMemoryUserId(options.userId);
+  throwIfAborted(options.signal);
+
   const memory = memoryUserId ? await getDavidConversationMemory(memoryUserId, 10) : [];
+  throwIfAborted(options.signal);
+
   const memoryUsedVerses = memory
     .map(item => item.verse_used)
     .filter((verse): verse is string => Boolean(verse));
   const combinedUsedVerses = Array.from(new Set([...(options.usedVerses || []), ...memoryUsedVerses]));
-  const voiceContext = buildVoiceConversationContext(history, memory);
+  const voiceContext = [
+    buildVoiceConversationContext(history, memory),
+    `Response length instruction: ${lengthInstruction}`,
+  ].filter(Boolean).join('\n');
 
-  // Map history to OpenAI format (Gemini uses 'model', OpenAI uses 'assistant')
+  // Map history to OpenAI format without mutating the user's actual words.
   const messages = history.map(h => ({
     role: h.role,
     content: h.content
   }));
-
-  // Append length instruction to the last message to guide OpenAI
-  if (messages.length > 0) {
-    messages[messages.length - 1].content += `\n\n[Instruction: ${lengthInstruction}]`;
-  }
 
   const latestUserMessage = [...history].reverse().find(message => message.role === 'user')?.content || '';
   const chatPayload = {
@@ -328,15 +335,18 @@ export const getDavidVoiceResponse = async (
     mode: 'json',
     messageCount: messages.length,
     latestUserPreview: previewText(latestUserMessage),
+    exactLatestUserText: latestUserMessage,
     moodKey: options.moodKey || null,
     usedVerseCount: combinedUsedVerses.length,
     voiceContextLength: voiceContext.length,
     responseLength,
   });
+
   const response = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(chatPayload)
+    body: JSON.stringify(chatPayload),
+    signal: options.signal,
   });
 
   if (!response.ok) {
@@ -375,17 +385,21 @@ export const getDavidVoiceResponse = async (
   const moodKey = data.moodKey || options.moodKey || null;
   const verseUsed = data.verseUsed || null;
 
-  if (memoryUserId && latestUserMessage && text) {
-    await saveDavidConversationMemory({
-      user_id: memoryUserId,
-      mood_key: moodKey,
-      user_message: latestUserMessage,
-      david_response: text,
-      verse_used: verseUsed,
-      opening_phrase: getOpeningPhrase(text),
-      follow_up_question: getFollowUpQuestion(text),
-      short_summary: `${moodKey || 'unknown mood'}: ${safeText(latestUserMessage, 180)} / verse: ${verseUsed || 'none'}`,
-    });
+  if (memoryUserId && latestUserMessage && text && !options.signal?.aborted) {
+    try {
+      await saveDavidConversationMemory({
+        user_id: memoryUserId,
+        mood_key: moodKey,
+        user_message: latestUserMessage,
+        david_response: text,
+        verse_used: verseUsed,
+        opening_phrase: getOpeningPhrase(text),
+        follow_up_question: getFollowUpQuestion(text),
+        short_summary: `${moodKey || 'unknown mood'}: ${safeText(latestUserMessage, 180)} / verse: ${verseUsed || 'none'}`,
+      });
+    } catch (error) {
+      console.log('[David Memory] Save failed without blocking the live voice reply:', error);
+    }
   }
 
   return {
@@ -401,6 +415,7 @@ export const getChatResponseStream = async (
   onChunk: (text: string) => void,
   responseLength: ResponseLength = 'short',
   moodKey?: string,
+  options: RequestOptions = {},
 ): Promise<string> => {
   const lengthInstruction = {
     short: "Voice turn: 6-28 words when possible. One natural spoken beat, maybe two. No lists, no greeting, no customer-support language.",
@@ -408,16 +423,15 @@ export const getChatResponseStream = async (
     long: "Voice turn: 2-3 short sentences max. Give the simple answer first, then stop. No sermon, no bullet list."
   }[responseLength];
 
-  const voiceContext = buildVoiceConversationContext(history);
+  const voiceContext = [
+    buildVoiceConversationContext(history),
+    `Response length instruction: ${lengthInstruction}`,
+  ].filter(Boolean).join('\n');
 
   const messages = history.map(h => ({
     role: h.role,
     content: h.content
   }));
-
-  if (messages.length > 0) {
-    messages[messages.length - 1].content += `\n\n[Instruction: ${lengthInstruction}]`;
-  }
 
   const latestUserMessage = [...history].reverse().find(message => message.role === 'user')?.content || '';
   const streamPayload = { messages, stream: true, moodKey, voiceContext };
@@ -430,10 +444,12 @@ export const getChatResponseStream = async (
     voiceContextLength: voiceContext.length,
     responseLength,
   });
+
   const response = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(streamPayload)
+    body: JSON.stringify(streamPayload),
+    signal: options.signal,
   });
 
   if (!response.ok) {
@@ -464,6 +480,7 @@ export const getChatResponseStream = async (
   if (!reader) throw new Error("No reader");
 
   while (true) {
+    throwIfAborted(options.signal);
     const { done, value } = await reader.read();
     if (done) break;
 
@@ -479,7 +496,7 @@ export const getChatResponseStream = async (
           fullText += data.text;
           onChunk(fullText);
         } catch (e) {
-          // Ignore parse errors for incomplete lines
+          // Ignore parse errors for incomplete lines.
         }
       }
     }
@@ -499,6 +516,8 @@ export const generateSpeech = async (
   text: string,
   options: GenerateSpeechOptions = {},
 ): Promise<string | null> => {
+  throwIfAborted(options.signal);
+
   const speechText = options.alreadyPrepared
     ? text.trim()
     : options.skipHumanize
@@ -512,6 +531,8 @@ export const generateSpeech = async (
   if (!(await isSpeechConfigured())) {
     return null;
   }
+
+  throwIfAborted(options.signal);
 
   const speechPayload = {
     text: speechText,
@@ -528,6 +549,7 @@ export const generateSpeech = async (
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(speechPayload),
+    signal: options.signal,
   });
 
   if (!response.ok) {
@@ -568,7 +590,12 @@ export const generateSpeech = async (
   return URL.createObjectURL(blob);
 };
 
-export const transcribeAudio = async (audioBlob: Blob): Promise<TranscribeAudioResult> => {
+export const transcribeAudio = async (
+  audioBlob: Blob,
+  options: RequestOptions = {},
+): Promise<TranscribeAudioResult> => {
+  throwIfAborted(options.signal);
+
   if (!audioBlob.size) {
     return { transcript: '', rejected: true, reason: 'audio_empty' };
   }
@@ -583,6 +610,7 @@ export const transcribeAudio = async (audioBlob: Blob): Promise<TranscribeAudioR
       'Content-Type': audioBlob.type || 'audio/webm',
     },
     body: audioBlob,
+    signal: options.signal,
   });
 
   const data = await response.json().catch(() => ({}));
