@@ -1,0 +1,6 @@
+Vercel deploy trigger
+
+Purpose: force a fresh Vercel deployment after David voice state-machine fix.
+Triggered by: ChatGPT coding agent
+Date: 2026-06-26
+Previous David fix commit: 1228ea27b3788f2644dd08d03c0d832927773f09
