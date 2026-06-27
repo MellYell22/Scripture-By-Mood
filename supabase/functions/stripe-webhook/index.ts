@@ -137,13 +137,25 @@ serve(async (req) => {
 
         console.log(`[Stripe Webhook] Performing update for user ${userId} to tier: ${tier}`);
 
+        // Protect owner tier — never overwrite with stripe-derived tier
+        const { data: existingProfile } = await supabase
+          .from("profiles")
+          .select("subscription_tier")
+          .eq("id", userId)
+          .single();
+
+        if (existingProfile?.subscription_tier === "owner") {
+          console.log(`[Stripe Webhook] User ${userId} is owner — skipping tier update.`);
+          break;
+        }
+
         const updateData = {
           subscription_tier: tier,
           stripe_customer_id: customerId,
           ...subscriptionDetails,
           updated_at: new Date().toISOString(),
         };
-        
+
         console.log(`[Stripe Webhook] Update payload: ${JSON.stringify(updateData)}`);
 
         const { data, error } = await supabase
@@ -156,12 +168,13 @@ serve(async (req) => {
           console.error(`[Stripe Webhook] Error updating profile for ${userId}:`, error);
           throw error;
         }
-        
+
         if (!data || data.length === 0) {
-          console.warn(`[Stripe Webhook] WARNING: Profile update for ${userId} affected 0 rows. User might not exist in Supabase yet.`);
-        } else {
-          console.log(`[Stripe Webhook] Successfully updated profile for ${userId}. New tier in DB: ${data[0].subscription_tier}`);
+          console.error(`[Stripe Webhook] CRITICAL: Profile update for ${userId} affected 0 rows. Returning 500 so Stripe retries.`);
+          throw new Error(`Profile not found for userId: ${userId}`);
         }
+
+        console.log(`[Stripe Webhook] Successfully updated profile for ${userId}. New tier: ${data[0].subscription_tier}`);
         break;
       }
 
@@ -184,6 +197,18 @@ serve(async (req) => {
 
           console.log(`[Stripe Webhook] Updating customer ${customerId} to tier: ${tier}`);
 
+          // Protect owner tier
+          const { data: existingInvoiceProfile } = await supabase
+            .from("profiles")
+            .select("subscription_tier")
+            .eq("stripe_customer_id", customerId)
+            .single();
+
+          if (existingInvoiceProfile?.subscription_tier === "owner") {
+            console.log(`[Stripe Webhook] Customer ${customerId} is owner — skipping tier update.`);
+            break;
+          }
+
           const { data, error } = await supabase
             .from("profiles")
             .update({
@@ -202,12 +227,13 @@ serve(async (req) => {
             console.error(`[Stripe Webhook] Error updating profile for customer ${customerId}:`, error);
             throw error;
           }
-          
+
           if (!data || data.length === 0) {
-            console.warn(`[Stripe Webhook] WARNING: Profile update for customer ${customerId} affected 0 rows. customerId not found.`);
-          } else {
-            console.log(`[Stripe Webhook] Profile update result: SUCCESS for customer ${customerId}. New tier: ${data[0].subscription_tier}`);
+            console.error(`[Stripe Webhook] CRITICAL: 0 rows updated for customer ${customerId}. Returning 500 so Stripe retries.`);
+            throw new Error(`Profile not found for stripe_customer_id: ${customerId}`);
           }
+
+          console.log(`[Stripe Webhook] SUCCESS for customer ${customerId}. New tier: ${data[0].subscription_tier}`);
         }
         break;
       }
