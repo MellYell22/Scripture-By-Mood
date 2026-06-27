@@ -269,8 +269,8 @@ const buildVoiceConversationContext = (
 
 const buildLengthInstruction = (responseLength: ResponseLength): string => {
   return {
-    short: "Voice turn: use the required David scripture flow, but keep every sentence warm and simple. Vary the wording.",
-    medium: "Voice turn: sound human and unscripted. Acknowledge, use scripture naturally, give one short reflection, and only ask a gentle question if it truly fits.",
+    short: "Voice turn: answer quickly in 1 or 2 short spoken sentences. Keep it warm, scripture-based when useful, and easy to say out loud.",
+    medium: "Voice turn: sound human and unscripted. Acknowledge briefly, use scripture naturally, and stop before it becomes a devotional paragraph.",
     long: "Voice turn: full David scripture flow, conversational and pastoral, no list formatting. Avoid recycled openings and repeated question endings."
   }[responseLength];
 };
@@ -302,18 +302,14 @@ export const getDavidVoiceResponse = async (
 
   throwIfAborted(options.signal);
 
-  const memoryUserId = await resolveDavidMemoryUserId(options.userId);
-  throwIfAborted(options.signal);
+  const memoryUserIdPromise = resolveDavidMemoryUserId(options.userId).catch(error => {
+    console.log('[David Memory] User lookup skipped for live voice speed:', error);
+    return null;
+  });
 
-  const memory = memoryUserId ? await getDavidConversationMemory(memoryUserId, 10) : [];
-  throwIfAborted(options.signal);
-
-  const memoryUsedVerses = memory
-    .map(item => item.verse_used)
-    .filter((verse): verse is string => Boolean(verse));
-  const combinedUsedVerses = Array.from(new Set([...(options.usedVerses || []), ...memoryUsedVerses]));
+  const combinedUsedVerses = Array.from(new Set([...(options.usedVerses || [])]));
   const voiceContext = [
-    buildVoiceConversationContext(history, memory),
+    buildVoiceConversationContext(history, []),
     `Response length instruction: ${lengthInstruction}`,
   ].filter(Boolean).join('\n');
 
@@ -340,6 +336,7 @@ export const getDavidVoiceResponse = async (
     usedVerseCount: combinedUsedVerses.length,
     voiceContextLength: voiceContext.length,
     responseLength,
+    memoryMode: 'background',
   });
 
   const response = await fetch('/api/chat', {
@@ -385,21 +382,26 @@ export const getDavidVoiceResponse = async (
   const moodKey = data.moodKey || options.moodKey || null;
   const verseUsed = data.verseUsed || null;
 
-  if (memoryUserId && latestUserMessage && text && !options.signal?.aborted) {
-    try {
-      await saveDavidConversationMemory({
-        user_id: memoryUserId,
-        mood_key: moodKey,
-        user_message: latestUserMessage,
-        david_response: text,
-        verse_used: verseUsed,
-        opening_phrase: getOpeningPhrase(text),
-        follow_up_question: getFollowUpQuestion(text),
-        short_summary: `${moodKey || 'unknown mood'}: ${safeText(latestUserMessage, 180)} / verse: ${verseUsed || 'none'}`,
-      });
-    } catch (error) {
-      console.log('[David Memory] Save failed without blocking the live voice reply:', error);
-    }
+  if (latestUserMessage && text && !options.signal?.aborted) {
+    void (async () => {
+      try {
+        const memoryUserId = await memoryUserIdPromise;
+        if (!memoryUserId || options.signal?.aborted) return;
+
+        await saveDavidConversationMemory({
+          user_id: memoryUserId,
+          mood_key: moodKey,
+          user_message: latestUserMessage,
+          david_response: text,
+          verse_used: verseUsed,
+          opening_phrase: getOpeningPhrase(text),
+          follow_up_question: getFollowUpQuestion(text),
+          short_summary: `${moodKey || 'unknown mood'}: ${safeText(latestUserMessage, 180)} / verse: ${verseUsed || 'none'}`,
+        });
+      } catch (error) {
+        console.log('[David Memory] Save failed without blocking the live voice reply:', error);
+      }
+    })();
   }
 
   return {
