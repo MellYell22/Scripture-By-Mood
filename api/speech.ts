@@ -54,8 +54,8 @@ export default async function handler(req: any, res: any) {
       voice_settings: {
         stability: 0.72,
         similarity_boost: 0.88,
-        speed: 0.96,
-        style: 0.32,
+        speed: 0.92,
+        style: 0.4,
       },
     };
 
@@ -113,7 +113,6 @@ export default async function handler(req: any, res: any) {
 
     res.setHeader('Content-Type', 'audio/mpeg');
     res.setHeader('Content-Length', buffer.length);
-    res.setHeader('Cache-Control', 'no-store');
 
     return res.status(200).send(buffer);
   } catch (error: any) {
