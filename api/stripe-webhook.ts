@@ -56,29 +56,45 @@ export default async function handler(req: any, res: any) {
         console.log("👤 Found userId:", userId);
 
         if (userId) {
-          // 🔥 UPDATE SUPABASE USER
           const { createClient } = await import("@supabase/supabase-js");
-
           const supabase = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
             process.env.SUPABASE_SERVICE_ROLE_KEY!
           );
 
-          const { error } = await supabase
+          // Protect owner tier — never overwrite
+          const { data: existing } = await supabase
+            .from("profiles")
+            .select("subscription_tier")
+            .eq("id", userId)
+            .single();
+
+          if (existing?.subscription_tier === "owner") {
+            console.log("👑 Owner tier preserved for userId:", userId);
+            break;
+          }
+
+          const { data: updated, error } = await supabase
             .from("profiles")
             .update({
               subscription_tier: "pro",
               subscription_status: "active",
-              plan: "pro",
               stripe_subscription_status: "active",
             })
-            .eq("id", userId);
+            .eq("id", userId)
+            .select();
 
           if (error) {
             console.error("❌ Supabase update failed:", error);
-          } else {
-            console.log("✅ User upgraded to PRO:", userId);
+            throw error; // Let Stripe retry
           }
+
+          if (!updated || updated.length === 0) {
+            console.error("❌ 0 rows updated for userId:", userId, "— Stripe will retry");
+            throw new Error(`Profile not found for userId: ${userId}`);
+          }
+
+          console.log("✅ User upgraded to PRO:", userId);
         } else {
           console.error("❌ No userId found in metadata");
         }
@@ -97,19 +113,41 @@ export default async function handler(req: any, res: any) {
 
         if (userId) {
           const { createClient } = await import("@supabase/supabase-js");
-
           const supabase = createClient(
             process.env.NEXT_PUBLIC_SUPABASE_URL!,
             process.env.SUPABASE_SERVICE_ROLE_KEY!
           );
 
-          await supabase
+          // Protect owner tier — never downgrade
+          const { data: existing } = await supabase
+            .from("profiles")
+            .select("subscription_tier")
+            .eq("id", userId)
+            .single();
+
+          if (existing?.subscription_tier === "owner") {
+            console.log("👑 Owner tier preserved during downgrade event for userId:", userId);
+            break;
+          }
+
+          const { data: updated, error } = await supabase
             .from("profiles")
             .update({
               subscription_tier: "free",
               subscription_status: "inactive",
             })
-            .eq("id", userId);
+            .eq("id", userId)
+            .select();
+
+          if (error) {
+            console.error("❌ Downgrade update failed:", error);
+            throw error;
+          }
+
+          if (!updated || updated.length === 0) {
+            console.error("❌ 0 rows updated on downgrade for userId:", userId, "— Stripe will retry");
+            throw new Error(`Profile not found for userId: ${userId}`);
+          }
 
           console.log("⬇️ User downgraded:", userId);
         }
