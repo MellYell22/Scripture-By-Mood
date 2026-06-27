@@ -27,6 +27,15 @@ type RequestOptions = {
 };
 
 let speechConfiguredCache: boolean | null = null;
+const VOICE_MEMORY_WAIT_BUDGET_MS = 300;
+
+type VoiceMemoryCacheEntry = {
+  memory: DavidConversationMemory[];
+  expiresAt: number;
+  request?: Promise<DavidConversationMemory[]>;
+};
+
+const voiceMemoryCache = new Map<string, VoiceMemoryCacheEntry>();
 
 const previewText = (value: string, maxLength = 160): string => (
   value.replace(/\s+/g, ' ').trim().slice(0, maxLength)
@@ -52,20 +61,38 @@ const throwIfAborted = (signal?: AbortSignal) => {
   throw error;
 };
 
-const isSpeechConfigured = async (): Promise<boolean> => {
-  if (speechConfiguredCache !== null) return speechConfiguredCache;
+const waitFor = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-  try {
-    const response = await fetch('/api/health');
-    if (!response.ok) return true;
+const getVoiceMemory = async (userId: string | null): Promise<DavidConversationMemory[]> => {
+  if (!userId) return [];
 
-    const data = await response.json();
-    const configured = data?.configured?.ELEVENLABS_API_KEY !== false;
-    speechConfiguredCache = configured;
-    return configured;
-  } catch {
-    return true;
-  }
+  const now = Date.now();
+  const cached = voiceMemoryCache.get(userId);
+  if (cached?.expiresAt && cached.expiresAt > now) return cached.memory;
+
+  const request = cached?.request || getDavidConversationMemory(userId, 10)
+    .then((memory) => {
+      voiceMemoryCache.set(userId, {
+        memory,
+        expiresAt: Date.now() + 60_000,
+      });
+      return memory;
+    })
+    .catch((error) => {
+      console.log('[David Memory] Voice memory load failed without delaying speech:', error);
+      return cached?.memory || [];
+    });
+
+  voiceMemoryCache.set(userId, {
+    memory: cached?.memory || [],
+    expiresAt: cached?.expiresAt || 0,
+    request,
+  });
+
+  return Promise.race([
+    request,
+    waitFor(VOICE_MEMORY_WAIT_BUDGET_MS).then(() => cached?.memory || []),
+  ]);
 };
 
 export const getMoodScriptures = async (
@@ -294,6 +321,7 @@ export const getDavidVoiceResponse = async (
     moodKey?: string;
     usedVerses?: string[];
     userId?: string | null;
+    liveVoice?: boolean;
     signal?: AbortSignal;
   } = {},
 ): Promise<DavidVoiceResponse> => {
@@ -305,7 +333,7 @@ export const getDavidVoiceResponse = async (
   const memoryUserId = await resolveDavidMemoryUserId(options.userId);
   throwIfAborted(options.signal);
 
-  const memory = memoryUserId ? await getDavidConversationMemory(memoryUserId, 10) : [];
+  const memory = await getVoiceMemory(memoryUserId);
   throwIfAborted(options.signal);
 
   const memoryUsedVerses = memory
@@ -329,6 +357,7 @@ export const getDavidVoiceResponse = async (
     moodKey: options.moodKey,
     voiceContext,
     usedVerses: combinedUsedVerses,
+    liveVoice: Boolean(options.liveVoice),
   };
 
   logApiRequest('POST /api/chat', {
@@ -386,20 +415,26 @@ export const getDavidVoiceResponse = async (
   const verseUsed = data.verseUsed || null;
 
   if (memoryUserId && latestUserMessage && text && !options.signal?.aborted) {
-    try {
-      await saveDavidConversationMemory({
-        user_id: memoryUserId,
-        mood_key: moodKey,
-        user_message: latestUserMessage,
-        david_response: text,
-        verse_used: verseUsed,
-        opening_phrase: getOpeningPhrase(text),
-        follow_up_question: getFollowUpQuestion(text),
-        short_summary: `${moodKey || 'unknown mood'}: ${safeText(latestUserMessage, 180)} / verse: ${verseUsed || 'none'}`,
-      });
-    } catch (error) {
+    const memoryEntry: DavidConversationMemory = {
+      user_id: memoryUserId,
+      mood_key: moodKey,
+      user_message: latestUserMessage,
+      david_response: text,
+      verse_used: verseUsed,
+      opening_phrase: getOpeningPhrase(text),
+      follow_up_question: getFollowUpQuestion(text),
+      short_summary: `${moodKey || 'unknown mood'}: ${safeText(latestUserMessage, 180)} / verse: ${verseUsed || 'none'}`,
+      created_at: new Date().toISOString(),
+    };
+    const cached = voiceMemoryCache.get(memoryUserId);
+    voiceMemoryCache.set(memoryUserId, {
+      memory: [memoryEntry, ...(cached?.memory || [])].slice(0, 10),
+      expiresAt: Date.now() + 60_000,
+      request: cached?.request,
+    });
+    void saveDavidConversationMemory(memoryEntry).catch((error) => {
       console.log('[David Memory] Save failed without blocking the live voice reply:', error);
-    }
+    });
   }
 
   return {
@@ -528,7 +563,7 @@ export const generateSpeech = async (
 
   if (!speechText) return null;
 
-  if (!(await isSpeechConfigured())) {
+  if (speechConfiguredCache === false) {
     return null;
   }
 
