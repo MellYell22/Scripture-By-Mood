@@ -7,6 +7,10 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "content-type, stripe-signature",
 };
 
+const DEFAULT_PRO_PRICE_ID = "price_1TRTQuGDw0P2L0A1MsgZiMeM";
+const hasPaidProStatus = (status: string | null | undefined) => status === "active" || status === "trialing";
+const getProPriceId = () => Deno.env.get("STRIPE_PRICE_ID_PRO") || DEFAULT_PRO_PRICE_ID;
+
 serve(async (req) => {
   // Handle CORS preflight
   if (req.method === "OPTIONS") {
@@ -108,30 +112,20 @@ serve(async (req) => {
         const lineItems = await stripe.checkout.sessions.listLineItems(session.id);
         const priceId = lineItems.data[0]?.price?.id;
         
-        let tier = "free";
-        const proPriceId = Deno.env.get("STRIPE_PRICE_ID_PRO");
+        const proPriceId = getProPriceId();
+        const subscription = subscriptionId ? await stripe.subscriptions.retrieve(subscriptionId) : null;
+        const tier = priceId === proPriceId && hasPaidProStatus(subscription?.status) ? "pro" : "free";
 
         console.log(`[Stripe Webhook] Price ID from session: ${priceId}, Expected Pro ID: ${proPriceId}`);
 
-        if (priceId === proPriceId) {
-          tier = "pro";
-          console.log("[Stripe Webhook] Tier determined: pro (Matched Price ID)");
-        } else if (!proPriceId && priceId) {
-          console.warn("[Stripe Webhook] WARNING: STRIPE_PRICE_ID_PRO is not set in environment. Defaulting to 'pro' because priceId is present.");
-          tier = "pro";
-        } else {
-          console.log(`[Stripe Webhook] Tier determined: ${tier} (No match)`);
-        }
-
         // Get subscription details if available
         let subscriptionDetails = {};
-        if (subscriptionId) {
-          const sub = await stripe.subscriptions.retrieve(subscriptionId);
+        if (subscription) {
           subscriptionDetails = {
             stripe_subscription_id: subscriptionId,
-            stripe_subscription_status: sub.status,
+            stripe_subscription_status: subscription.status,
             stripe_price_id: priceId,
-            stripe_current_period_end: new Date(sub.current_period_end * 1000).toISOString(),
+            stripe_current_period_end: new Date(subscription.current_period_end * 1000).toISOString(),
           };
         }
 
@@ -139,6 +133,8 @@ serve(async (req) => {
 
         const updateData = {
           subscription_tier: tier,
+          subscription_status: tier === "pro" ? "active" : "inactive",
+          plan: tier,
           stripe_customer_id: customerId,
           ...subscriptionDetails,
           updated_at: new Date().toISOString(),
@@ -177,10 +173,7 @@ serve(async (req) => {
           const subscription = await stripe.subscriptions.retrieve(subscriptionId);
           const priceId = subscription.items.data[0]?.price?.id;
           
-          let tier = "free";
-          const proPriceId = Deno.env.get("STRIPE_PRICE_ID_PRO");
-
-          if (priceId === proPriceId) tier = "pro";
+          const tier = priceId === getProPriceId() && hasPaidProStatus(subscription.status) ? "pro" : "free";
 
           console.log(`[Stripe Webhook] Updating customer ${customerId} to tier: ${tier}`);
 
@@ -188,6 +181,8 @@ serve(async (req) => {
             .from("profiles")
             .update({
               subscription_tier: tier,
+              subscription_status: tier === "pro" ? "active" : "inactive",
+              plan: tier,
               stripe_customer_id: customerId,
               stripe_subscription_id: subscriptionId,
               stripe_subscription_status: subscription.status,
@@ -218,10 +213,7 @@ serve(async (req) => {
         const customerId = subscription.customer as string;
         const priceId = subscription.items.data[0]?.price?.id;
 
-        let tier = "free";
-        const proPriceId = Deno.env.get("STRIPE_PRICE_ID_PRO");
-
-        if (priceId === proPriceId) tier = "pro";
+        const tier = priceId === getProPriceId() && hasPaidProStatus(subscription.status) ? "pro" : "free";
 
         console.log(`[Stripe Webhook] Subscription changed for customer ${customerId}. New tier: ${tier}, Status: ${subscription.status}`);
 
@@ -229,6 +221,8 @@ serve(async (req) => {
           .from("profiles")
           .update({
             subscription_tier: tier,
+            subscription_status: tier === "pro" ? "active" : "inactive",
+            plan: tier,
             stripe_subscription_id: subscription.id,
             stripe_subscription_status: subscription.status,
             stripe_price_id: priceId,
@@ -261,6 +255,8 @@ serve(async (req) => {
           .from("profiles")
           .update({
             subscription_tier: "free",
+            subscription_status: "canceled",
+            plan: "free",
             updated_at: new Date().toISOString(),
           })
           .eq("stripe_customer_id", customerId);
