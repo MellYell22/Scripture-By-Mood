@@ -16,14 +16,16 @@ export const PLANS = {
   },
   PRO: {
     id: 'pro',
-    name: 'Pro',
+    name: "David's Voice Pro",
     price: '$9.99',
     interval: 'mo',
     priceId: import.meta.env.VITE_STRIPE_PRICE_ID_PRO || 'price_1TRTQuGDw0P2L0A1MsgZiMeM',
     features: [
       'Unlimited AI chat with David',
       'Live voice chat with David',
-      'Deeper scripture insights',
+      'Saved favorites & bookmarks',
+      'Chat history sync',
+      'Deeper scripture reflections',
       'Ad-free experience',
     ],
   },
