@@ -533,7 +533,7 @@ export default function ProfileScreen({ route, navigation }: { route?: { params?
                     styles.planButtonText, 
                     plan.id === 'pro' && { color: '#0b1e3d' }
                   ]}>
-                    Upgrade to {plan.name.split(' ')[0]}
+                    {plan.id === 'pro' ? "Get David's Voice Pro" : `Upgrade to ${plan.name}`}
                   </Text>
                 )}
               </TouchableOpacity>
