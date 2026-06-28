@@ -1,9 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, ActivityIndicator, Alert, TextInput } from 'react-native';
 import { supabase } from '../services/supabase';
-import { Profile } from '../types';
-import { LogOut, CreditCard, Shield, CheckCircle2, AlertCircle, Lock, Star, Bookmark, Trash2, Check, ExternalLink, ChevronDown, ChevronUp } from 'lucide-react';
-import { createCheckoutSession } from '../services/stripe';
+import { LogOut, CheckCircle2, AlertCircle, Lock, Star, Bookmark, Trash2, Check, ChevronDown, ChevronUp } from 'lucide-react';
+import { createCheckoutSession, syncCheckoutSession } from '../services/stripe';
 import { OWNER_EMAIL, hasProAccess } from '../utils/tier';
 import { PLANS } from '../constants';
 import { getSavedScriptures, toggleMemorized, deleteSavedScripture, updateScriptureCategory } from '../services/supabase';
@@ -61,78 +60,80 @@ export default function ProfileScreen({ route, navigation }: { route?: { params?
   }, [route?.params?.showPricing, showSavedScriptures]);
 
   useEffect(() => {
-    // Return early if we've already handled this redirect in this component instance
     if (hasHandledRedirect.current) return;
 
-    // Check for URL parameters (success/canceled)
-    const urlParams = new URLSearchParams(window.location.search);
-    const success = urlParams.get('success') === 'true' || route?.params?.success || route?.params?.paymentSuccess;
-    const canceled = urlParams.get('canceled') === 'true' || route?.params?.canceled;
-    const showPricing = route?.params?.showPricing;
+    const handleStripeRedirect = async () => {
+      const hasWindow = typeof window !== 'undefined';
+      const urlParams = hasWindow ? new URLSearchParams(window.location.search) : null;
+      const success = urlParams?.get('success') === 'true' || route?.params?.success === true || route?.params?.paymentSuccess === true;
+      const canceled = urlParams?.get('canceled') === 'true' || route?.params?.canceled === true;
+      const sessionId = urlParams?.get('session_id') || route?.params?.sessionId;
 
-    if (success || canceled) {
+      if (!success && !canceled) return;
+
       console.log(`[StripeDebug] Handling Stripe redirect. Success: ${!!success}, Canceled: ${!!canceled}`);
-      
-      // Mark as handled to prevent re-triggering within this lifecycle
       hasHandledRedirect.current = true;
 
-      // Update state based on parameters
       if (success) {
-        if (profile?.subscription_tier !== 'pro') {
+        if (profile?.subscription_tier === 'pro' || profile?.subscription_tier === 'owner') {
+          setStatusMessage({ text: 'Subscription updated successfully! Welcome to the Pro family.', type: 'success' });
+        } else if (profile?.id === 'guest') {
+          setStatusMessage({ text: 'Please sign in to verify a payment and activate Pro features.', type: 'error' });
+        } else if (!sessionId) {
+          setStatusMessage({ text: 'We could not verify your checkout because its confirmation ID is missing. Please contact support with your receipt.', type: 'error' });
+        } else {
           setIsActivating(true);
-          setStatusMessage({ text: 'Payment received! Activating your Pro plan...', type: 'info' });
-          
-          // Poll for server-authoritative Pro tier — no client-side writes
+          setStatusMessage({ text: 'Payment received! Verifying and activating your Pro plan...', type: 'info' });
+
           let attempts = 0;
-          const maxAttempts = 15;
+          const maxAttempts = 10;
 
-          const checkStatus = async () => {
-            attempts++;
-            console.log(`[StripeDebug] Polling subscription status (Attempt ${attempts}/${maxAttempts})...`);
+          const verifyAndRefresh = async () => {
+            attempts += 1;
+            console.log(`[StripeDebug] Verifying completed checkout (Attempt ${attempts}/${maxAttempts})...`);
 
-            const latestProfile = await refreshProfile(false);
-            
-            if (latestProfile?.subscription_tier === 'pro' || latestProfile?.subscription_tier === 'owner') {
-              console.log('[StripeDebug] PRO STATUS CONFIRMED via manual fetch! Unlocking app features.');
-              setIsActivating(false);
-              setStatusMessage({ text: 'Activation complete! Welcome to the Pro family.', type: 'success' });
-              return; // Stop polling
+            try {
+              await syncCheckoutSession(sessionId);
+            } catch (error: any) {
+              console.warn('[StripeDebug] Checkout verification is not ready yet:', error?.message || error);
+            }
+
+            try {
+              const latestProfile = await refreshProfile(false);
+              if (latestProfile?.subscription_tier === 'pro' || latestProfile?.subscription_tier === 'owner') {
+                console.log('[StripeDebug] PRO STATUS CONFIRMED. Unlocking app features.');
+                setIsActivating(false);
+                setStatusMessage({ text: 'Activation complete! Welcome to the Pro family.', type: 'success' });
+                return;
+              }
+            } catch (error: any) {
+              console.error('[StripeDebug] Profile refresh failed:', error?.message || error);
             }
 
             if (attempts >= maxAttempts) {
               setIsActivating(false);
-              setStatusMessage({ 
-                text: 'Activation is taking a bit longer than expected. It will update automatically in a few moments.', 
-                type: 'info' 
-              });
-              return; // Stop polling
+              setStatusMessage({ text: 'We could not confirm the payment yet. Your card was not charged twice; please refresh your profile in a moment or contact support with your receipt.', type: 'error' });
+              return;
             }
 
-            // Schedule next attempt
-            pollingInterval.current = setTimeout(checkStatus, 2000);
+            pollingInterval.current = setTimeout(verifyAndRefresh, 2000);
           };
 
-          // Start the polling chain
-          checkStatus();
-        } else {
-          setStatusMessage({ text: 'Subscription updated successfully! Welcome to the Pro family.', type: 'success' });
+          await verifyAndRefresh();
         }
-      } else if (canceled) {
+      } else {
         setStatusMessage({ text: 'Checkout canceled. No changes were made.', type: 'info' });
       }
 
-      // 1. Clear Params from React Navigation state if possible
-      if (navigation && navigation.setParams) {
-        navigation.setParams({ success: undefined, canceled: undefined });
-      }
+      navigation?.setParams?.({ success: undefined, canceled: undefined, paymentSuccess: undefined, sessionId: undefined });
 
-      // 2. Clear params from Browser URL bar without reload
-      if (typeof window !== 'undefined' && window.history) {
-        const cleanUrl = window.location.pathname;
-        window.history.replaceState({}, '', cleanUrl);
+      if (hasWindow && window.history) {
+        window.history.replaceState({}, '', window.location.pathname);
       }
-    }
-  }, [route?.params, refreshProfile, navigation]);
+    };
+
+    void handleStripeRedirect();
+  }, [route?.params, refreshProfile, navigation, profile?.subscription_tier]);
 
   const handleLogout = async () => {
     await signOut();
@@ -198,10 +199,10 @@ export default function ProfileScreen({ route, navigation }: { route?: { params?
     console.log(`[StripeDebug] Upgrade button clicked: ${tierId}`);
     
     try {
-      if (!plan || !plan.priceId) {
-        throw new Error(`Price ID for ${tierId} plan is not configured.`);
+      if (!plan || plan.id !== 'pro') {
+        throw new Error(`The ${tierId} plan is not available for checkout.`);
       }
-      await createCheckoutSession(plan.priceId);
+      await createCheckoutSession();
     } catch (error: any) {
       console.error(`[StripeDebug] Upgrade error: ${error.message}`);
       setStatusMessage({ text: error.message, type: 'error' });

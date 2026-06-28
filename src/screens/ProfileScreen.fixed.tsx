@@ -209,7 +209,7 @@ export default function ProfileScreen({ route, navigation }: { route?: { params?
       if (!plan || !plan.priceId) {
         throw new Error(`Price ID for ${tierId} plan is not configured.`);
       }
-      await createCheckoutSession(plan.priceId);
+      await createCheckoutSession();
     } catch (error: any) {
       console.error(`[StripeDebug] Upgrade error: ${error.message}`);
       setStatusMessage({ text: error.message, type: 'error' });

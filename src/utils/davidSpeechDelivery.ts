@@ -116,6 +116,18 @@ const addTinyNaturalBreaths = (text: string): string => {
   return t;
 };
 
+const lightlyShortenRunOn = (text: string): string => {
+  const sentenceMatches = text.match(/[^.!?]+[.!?]+|[^.!?]+$/g);
+
+  if (!sentenceMatches || sentenceMatches.length <= 2) {
+    return text;
+  }
+
+  const firstTwo = sentenceMatches.slice(0, 2).join(' ').trim();
+
+  return firstTwo.length >= 28 ? firstTwo : text;
+};
+
 function preparePlainSpeechText(text: string): string {
   let t = text.trim();
 
@@ -145,6 +157,8 @@ export function humanizeForTts(
   if (!text) return '';
 
   let t = preparePlainSpeechText(text);
+
+  t = lightlyShortenRunOn(t);
 
   t = t.replace(/\bI am\b/g, "I'm");
   t = t.replace(/\bYou are\b/g, "You're");
