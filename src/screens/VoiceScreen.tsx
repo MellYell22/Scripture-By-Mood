@@ -904,6 +904,20 @@ export default function VoiceScreen() {
       return;
     }
 
+    // Verify the session token is still valid before hitting the Edge Function
+    try {
+      const { supabase: sb } = await import('../services/supabase');
+      if (sb) {
+        const { error: authError } = await sb.auth.getUser();
+        if (authError) {
+          setError('Your session has expired. Please sign out and sign back in, then try again.');
+          return;
+        }
+      }
+    } catch {
+      // If we can't verify, let the Edge Function handle it
+    }
+
     try {
       setUpgradeLoading(true);
       await createCheckoutSession();
