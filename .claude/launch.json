@@ -3,7 +3,7 @@
   "configurations": [
     {
       "name": "react-bible",
-      "runtimeExecutable": "pnpm.cmd",
+      "runtimeExecutable": "npm",
       "runtimeArgs": ["run", "dev"],
       "port": 3000
     }

@@ -274,6 +274,13 @@ const buildVoiceConversationContext = (
   const lastUser = [...recent].reverse().find(message => message.role === 'user')?.content || '';
   const previousAssistant = [...recent].reverse().find(message => message.role === 'assistant')?.content || '';
 
+  const recentAssistantTurns = history
+    .filter(message => message.role === 'assistant')
+    .slice(-4)
+    .map(message => message.content);
+  const sessionOpenings = Array.from(new Set(recentAssistantTurns.map(getOpeningPhrase).filter(Boolean)));
+  const sessionQuestions = Array.from(new Set(recentAssistantTurns.map(getFollowUpQuestion).filter(Boolean)));
+
   const emotionalWords = [
     'anxious', 'anxiety', 'panic', 'afraid', 'worried', 'sad', 'lonely', 'alone',
     'guilty', 'ashamed', 'overwhelmed', 'tired', 'grief', 'grieving', 'angry',
@@ -288,6 +295,8 @@ const buildVoiceConversationContext = (
     lastUser ? `Latest user words: ${lastUser}` : '',
     emotionalThread ? `Emotional thread to remember quietly: ${emotionalThread}` : '',
     previousAssistant ? `Do not echo David's last wording: ${previousAssistant}` : '',
+    sessionOpenings.length ? `Openings David already used this session: ${sessionOpenings.join(' | ')}. Open a genuinely different way this turn.` : '',
+    sessionQuestions.length ? `Questions David already asked this session: ${sessionQuestions.join(' | ')}. Do not repeat these; often end with no question at all.` : '',
     buildMemorySummary(memory),
     'Continue the live voice conversation. Follow the user current direction, avoid restarting, and keep the next spoken turn short.',
     'Use varied wording, varied scripture lead-ins, and varied endings.'
@@ -296,9 +305,9 @@ const buildVoiceConversationContext = (
 
 const buildLengthInstruction = (responseLength: ResponseLength): string => {
   return {
-    short: "Voice turn: use the required David scripture flow, but keep every sentence warm and simple. Vary the wording.",
-    medium: "Voice turn: sound human and unscripted. Acknowledge, use scripture naturally, give one short reflection, and only ask a gentle question if it truly fits.",
-    long: "Voice turn: full David scripture flow, conversational and pastoral, no list formatting. Avoid recycled openings and repeated question endings."
+    short: "Voice turn: 1 to 2 short spoken sentences, warm and simple. Use scripture only if it fits naturally, and vary the wording every turn.",
+    medium: "Voice turn: sound human and unscripted. Acknowledge, use scripture naturally if it fits, give one short reflection, and only ask a gentle question if it truly fits.",
+    long: "Voice turn: 2 to 3 short sentences max, conversational and pastoral, no list formatting. Avoid recycled openings and repeated question endings."
   }[responseLength];
 };
 
@@ -330,10 +339,18 @@ export const getDavidVoiceResponse = async (
 
   throwIfAborted(options.signal);
 
-  const memoryUserId = await resolveDavidMemoryUserId(options.userId);
-  throwIfAborted(options.signal);
+  // Resolve identity + memory in the background with a hard time budget so
+  // Supabase lookups can never delay David's spoken reply.
+  const memoryContextPromise: Promise<{ userId: string | null; memory: DavidConversationMemory[] }> =
+    resolveDavidMemoryUserId(options.userId)
+      .then(async (userId) => ({ userId, memory: await getVoiceMemory(userId) }))
+      .catch(() => ({ userId: null, memory: [] as DavidConversationMemory[] }));
 
-  const memory = await getVoiceMemory(memoryUserId);
+  const memoryContext = await Promise.race([
+    memoryContextPromise,
+    waitFor(VOICE_MEMORY_WAIT_BUDGET_MS).then(() => null),
+  ]);
+  const memory = memoryContext?.memory || [];
   throwIfAborted(options.signal);
 
   const memoryUsedVerses = memory
@@ -414,26 +431,31 @@ export const getDavidVoiceResponse = async (
   const moodKey = data.moodKey || options.moodKey || null;
   const verseUsed = data.verseUsed || null;
 
-  if (memoryUserId && latestUserMessage && text && !options.signal?.aborted) {
-    const memoryEntry: DavidConversationMemory = {
-      user_id: memoryUserId,
-      mood_key: moodKey,
-      user_message: latestUserMessage,
-      david_response: text,
-      verse_used: verseUsed,
-      opening_phrase: getOpeningPhrase(text),
-      follow_up_question: getFollowUpQuestion(text),
-      short_summary: `${moodKey || 'unknown mood'}: ${safeText(latestUserMessage, 180)} / verse: ${verseUsed || 'none'}`,
-      created_at: new Date().toISOString(),
-    };
-    const cached = voiceMemoryCache.get(memoryUserId);
-    voiceMemoryCache.set(memoryUserId, {
-      memory: [memoryEntry, ...(cached?.memory || [])].slice(0, 10),
-      expiresAt: Date.now() + 60_000,
-      request: cached?.request,
-    });
-    void saveDavidConversationMemory(memoryEntry).catch((error) => {
-      console.log('[David Memory] Save failed without blocking the live voice reply:', error);
+  if (latestUserMessage && text && !options.signal?.aborted) {
+    // Save memory fully in the background — speech playback never waits on this.
+    void memoryContextPromise.then(({ userId: memoryUserId }) => {
+      if (!memoryUserId) return;
+
+      const memoryEntry: DavidConversationMemory = {
+        user_id: memoryUserId,
+        mood_key: moodKey,
+        user_message: latestUserMessage,
+        david_response: text,
+        verse_used: verseUsed,
+        opening_phrase: getOpeningPhrase(text),
+        follow_up_question: getFollowUpQuestion(text),
+        short_summary: `${moodKey || 'unknown mood'}: ${safeText(latestUserMessage, 180)} / verse: ${verseUsed || 'none'}`,
+        created_at: new Date().toISOString(),
+      };
+      const cached = voiceMemoryCache.get(memoryUserId);
+      voiceMemoryCache.set(memoryUserId, {
+        memory: [memoryEntry, ...(cached?.memory || [])].slice(0, 10),
+        expiresAt: Date.now() + 60_000,
+        request: cached?.request,
+      });
+      void saveDavidConversationMemory(memoryEntry).catch((error) => {
+        console.log('[David Memory] Save failed without blocking the live voice reply:', error);
+      });
     });
   }
 

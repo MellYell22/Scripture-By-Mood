@@ -1,7 +1,38 @@
 const DAVID_ELEVENLABS_VOICE_ID = 'ewxUvnyvvOehYjKjUVKC';
 const ELEVENLABS_TTS_URL = 'https://api.elevenlabs.io/v1/text-to-speech';
-const ELEVENLABS_MODEL = process.env.ELEVENLABS_MODEL || 'eleven_flash_v2_5';
-const ELEVENLABS_OUTPUT_FORMAT = process.env.ELEVENLABS_OUTPUT_FORMAT || 'mp3_22050_32';
+
+// Live voice must stay on a low-latency model. An env var can pick between
+// fast models, but it can never silently downgrade David to a slow one.
+const FAST_ELEVENLABS_MODELS = new Set([
+  'eleven_flash_v2_5',
+  'eleven_flash_v2',
+  'eleven_turbo_v2_5',
+  'eleven_turbo_v2',
+]);
+const DEFAULT_ELEVENLABS_MODEL = 'eleven_flash_v2_5';
+const requestedModel = (process.env.ELEVENLABS_MODEL || '').trim();
+const ELEVENLABS_MODEL = FAST_ELEVENLABS_MODELS.has(requestedModel)
+  ? requestedModel
+  : DEFAULT_ELEVENLABS_MODEL;
+if (requestedModel && ELEVENLABS_MODEL !== requestedModel) {
+  console.warn(`[Speech] Ignoring ELEVENLABS_MODEL="${requestedModel}" — not a fast live-voice model. Using ${DEFAULT_ELEVENLABS_MODEL}.`);
+}
+
+// Lightweight mp3 formats only, so web playback can start quickly.
+const FAST_OUTPUT_FORMATS = new Set([
+  'mp3_22050_32',
+  'mp3_44100_32',
+  'mp3_44100_64',
+  'mp3_44100_96',
+]);
+const DEFAULT_OUTPUT_FORMAT = 'mp3_22050_32';
+const requestedOutputFormat = (process.env.ELEVENLABS_OUTPUT_FORMAT || '').trim();
+const ELEVENLABS_OUTPUT_FORMAT = FAST_OUTPUT_FORMATS.has(requestedOutputFormat)
+  ? requestedOutputFormat
+  : DEFAULT_OUTPUT_FORMAT;
+if (requestedOutputFormat && ELEVENLABS_OUTPUT_FORMAT !== requestedOutputFormat) {
+  console.warn(`[Speech] Ignoring ELEVENLABS_OUTPUT_FORMAT="${requestedOutputFormat}" — not a lightweight web format. Using ${DEFAULT_OUTPUT_FORMAT}.`);
+}
 
 import { humanizeForTts } from '../src/utils/davidSpeechDelivery.js';
 
@@ -54,8 +85,8 @@ export default async function handler(req: any, res: any) {
       voice_settings: {
         stability: 0.72,
         similarity_boost: 0.88,
-        speed: 0.92,
-        style: 0.4,
+        speed: 1.0,
+        style: 0.35,
       },
     };
 

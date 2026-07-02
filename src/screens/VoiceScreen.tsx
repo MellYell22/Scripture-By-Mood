@@ -14,15 +14,15 @@ import { generateSpeech, getDavidVoiceResponse, transcribeAudio } from '../servi
 import { useUser } from '../UserContext';
 import { createCheckoutSession } from '../services/stripe';
 import { hasProAccess, OWNER_EMAIL } from '../utils/tier';
-import { humanizeForTts, prepareDavidTtsPayload } from '../utils/davidSpeechDelivery';
+import { prepareDavidTtsPayload } from '../utils/davidSpeechDelivery';
 import { detectMoodKeyFromMessages } from '../utils/davidMoodContext';
 import { getVoiceSessionGreeting } from '../constants/persona';
 
 const IDLE_VOICE_LEVELS = [0.18, 0.26, 0.2, 0.3, 0.22, 0.34, 0.24, 0.31, 0.2];
 
 const SPEECH_VOLUME_THRESHOLD = 0.11;
-const SILENCE_STOP_MS = 1100;
-const MIN_RECORDING_MS = 850;
+const SILENCE_STOP_MS = 850;
+const MIN_RECORDING_MS = 700;
 const HARD_MAX_RECORDING_MS = 45000;
 
 type ScreenPhase =
@@ -47,6 +47,8 @@ type PlayDavidAudioOptions = {
   requestId?: number;
   isGreeting?: boolean;
   resumeListening?: boolean;
+  /** Fired when audio actually starts (or when voice is unavailable) so text appears with the voice, not before it. */
+  onPlaybackStart?: () => void;
 };
 
 const cleanVerseMarker = (text: string): string =>
@@ -614,7 +616,7 @@ export default function VoiceScreen() {
     speechAbortControllerRef.current = speechController;
 
     try {
-      const preparedText = prepareDavidTtsPayload(humanizeForTts(text), {
+      const preparedText = prepareDavidTtsPayload(text, {
         isGreeting: options.isGreeting,
       }).speechText;
       const audioUrl = await generateSpeech(preparedText, {
@@ -631,6 +633,8 @@ export default function VoiceScreen() {
       }
 
       if (!audioUrl || Platform.OS !== 'web') {
+        // Voice unavailable — show the text so the response is not lost.
+        options.onPlaybackStart?.();
         if (options.resumeListening) {
           setPhase('listening');
           void startListening({ conversationId: options.conversationId });
@@ -670,7 +674,12 @@ export default function VoiceScreen() {
           finish();
           reject(new Error("David's voice audio was returned, but the browser could not play it."));
         };
-        audio.play().catch(reject);
+        audio
+          .play()
+          .then(() => {
+            options.onPlaybackStart?.();
+          })
+          .catch(reject);
       });
 
       if (!isCurrentConversation(options.conversationId, options.requestId)) {
@@ -688,6 +697,8 @@ export default function VoiceScreen() {
       if (!mountedRef.current) return;
       if (!isCurrentConversation(options.conversationId, options.requestId)) return;
 
+      // Speech failed — still show the text so the response is not lost.
+      options.onPlaybackStart?.();
       setError(err?.message || 'David had trouble speaking that response.');
       setPhase('error');
     } finally {
@@ -799,13 +810,13 @@ export default function VoiceScreen() {
       ];
 
       commitMessages(finalMessages);
-      setLastResponseText(cleanedResponse);
 
       await playDavidResponseAudio(cleanedResponse, {
         conversationId: localConversationId,
         requestId,
         isGreeting: false,
         resumeListening: shouldResumeListening,
+        onPlaybackStart: () => setLastResponseText(cleanedResponse),
       });
     } catch (err: any) {
       if (err?.name === 'AbortError') return;
@@ -854,12 +865,12 @@ export default function VoiceScreen() {
       session?.user?.email?.split('@')?.[0];
 
     const greeting = getVoiceSessionGreeting(firstName);
-    setLastResponseText(greeting);
 
     await playDavidResponseAudio(greeting, {
       conversationId: nextConversationId,
       isGreeting: true,
       resumeListening: true,
+      onPlaybackStart: () => setLastResponseText(greeting),
     });
   };
 

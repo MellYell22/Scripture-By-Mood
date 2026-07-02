@@ -12,35 +12,8 @@ export type HumanizeOptions = {
 
 const TRAILING_PAUSE_MARKS = /[\s,;:-]+$/;
 
-const SOFT_FILLER_RE =
-  /^(mm+|hmm+|hm+|yeah|hey|okay|alright|you know|i mean|well)[,\.\s]+/i;
-
 const SCRIPTED_MARKUP_RE =
   /\[(?:soft\s+breath|breath|inhale|exhale|sigh|pause)\]|\((?:soft\s+breath|breath|inhale|exhale|sigh|pause)\)|\*(?:soft\s+breath|breath|inhale|exhale|sigh|pause)\*/gi;
-
-const HUMAN_OPENERS = [
-  'mm,',
-  'hmm,',
-  'yeah,',
-  'well,',
-  'you know,',
-] as const;
-
-const DAVID_OPENERS = [
-  'Hmm, ',
-  'Well, ',
-  'You know, ',
-  "That's a good question, ",
-  'Let me share this with you, ',
-  'You see, ',
-] as const;
-
-const SHORT_ACKNOWLEDGEMENTS = [
-  'I hear you,',
-  "I'm with you,",
-  "That's a lot,",
-  'That feels heavy,',
-] as const;
 
 const ACKNOWLEDGEMENT_PERIOD_RE =
   /\b(I hear you|I'm with you|I am with you|That feels heavy|That's a lot|That is a lot|I get that|I understand)\.\s+/gi;
@@ -167,18 +140,6 @@ export function humanizeForTts(
   t = t.replace(/\bWe are\b/g, "We're");
   t = t.replace(/\bThey are\b/g, "They're");
 
-  if (
-    !options.isGreeting &&
-    !options.skipOpener &&
-    !SOFT_FILLER_RE.test(t) &&
-    Math.random() < 0.18
-  ) {
-    const opener =
-      DAVID_OPENERS[Math.floor(Math.random() * DAVID_OPENERS.length)];
-
-    t = opener + t.charAt(0).toLowerCase() + t.slice(1);
-  }
-
   return t.trim();
 }
 
@@ -187,19 +148,9 @@ export function sanitizeForDavidSpeech(text: string): string {
 
   let t = preparePlainSpeechText(text);
 
-  if (
-    t.length >= 12 &&
-    t.length <= 34 &&
-    !SOFT_FILLER_RE.test(t) &&
-    Math.random() < 0.07
-  ) {
-    const ack =
-      SHORT_ACKNOWLEDGEMENTS[
-      Math.floor(Math.random() * SHORT_ACKNOWLEDGEMENTS.length)
-      ];
-
-    t = `${ack} ${t.charAt(0).toLowerCase()}${t.slice(1)}`;
-  }
+  // Ellipses make ElevenLabs insert long breathing pauses; keep the beat short.
+  t = t.replace(/\s*\.{3}\s*/g, ', ');
+  t = t.replace(/,\s*,+/g, ',');
 
   t = t.replace(TRAILING_PAUSE_MARKS, '');
 
